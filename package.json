@@ -6,11 +6,11 @@
   "author": "xnetcat <xnetcat.dev@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xnetcat/uploadflow.git"
+    "url": "git+https://github.com/xnetcat/transflow.git"
   },
-  "homepage": "https://github.com/xnetcat/uploadflow#readme",
+  "homepage": "https://github.com/xnetcat/transflow#readme",
   "bugs": {
-    "url": "https://github.com/xnetcat/uploadflow/issues"
+    "url": "https://github.com/xnetcat/transflow/issues"
   },
   "type": "commonjs",
   "main": "dist/index.js",
@@ -31,8 +31,25 @@
   "files": [
     "dist",
     "assets",
+    "action.yml",
     "README.md",
     "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "aws",
+    "lambda",
+    "s3",
+    "redis",
+    "ffmpeg",
+    "serverless",
+    "nextjs",
+    "transcoding",
+    "media",
+    "ci",
+    "github-actions"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

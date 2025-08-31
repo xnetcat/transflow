@@ -1,0 +1,77 @@
+name: Transflow
+description: Bake, deploy, and cleanup AWS Lambda media pipelines with Transflow
+branding:
+  icon: upload-cloud
+  color: blue
+inputs:
+  mode:
+    description: "Action to perform: bake | deploy | cleanup"
+    required: true
+  branch:
+    description: "Branch name for deploy/cleanup"
+    required: false
+  sha:
+    description: "Git SHA for deploy"
+    required: false
+  tag:
+    description: "Optional image tag override for deploy"
+    required: false
+  config:
+    description: "Path to transflow.config.json"
+    required: false
+    default: transflow.config.json
+  yes:
+    description: "Run non-interactively with confirmations"
+    required: false
+    default: "false"
+  node-version:
+    description: "Node.js version"
+    required: false
+    default: "20"
+  aws-region:
+    description: "AWS region (used when configuring credentials)"
+    required: false
+  role-to-assume:
+    description: "IAM role ARN to assume via OIDC"
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - name: Configure AWS credentials
+      if: ${{ inputs.role-to-assume != '' && inputs.aws-region != '' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Bake templates
+      if: ${{ inputs.mode == 'bake' || inputs.mode == 'deploy' }}
+      shell: bash
+      run: |
+        npx -y -p @xnetcat/transflow transflow bake --config "${{ inputs.config }}"
+
+    - name: Deploy
+      if: ${{ inputs.mode == 'deploy' }}
+      shell: bash
+      run: |
+        ARGS=(--branch "${{ inputs.branch }}" --sha "${{ inputs.sha }}" --config "${{ inputs.config }}")
+        if [ -n "${{ inputs.tag }}" ]; then ARGS+=(--tag "${{ inputs.tag }}"); fi
+        if [ "${{ inputs.yes }}" = "true" ]; then ARGS+=(--yes); fi
+        npx -y -p @xnetcat/transflow transflow deploy "${ARGS[@]}"
+
+    - name: Cleanup
+      if: ${{ inputs.mode == 'cleanup' }}
+      shell: bash
+      run: |
+        ARGS=(--branch "${{ inputs.branch }}" --config "${{ inputs.config }}")
+        if [ "${{ inputs.yes }}" = "true" ]; then ARGS+=(--yes); fi
+        npx -y -p @xnetcat/transflow transflow cleanup "${ARGS[@]}"

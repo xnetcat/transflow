@@ -1,4 +1,4 @@
-### Uploadflow
+### Transflow
 
 Serverless media-processing for Next.js with S3 + Lambda (container images) + Redis (+ optional DynamoDB). Templates are written in TypeScript and baked into the Lambda image at deploy time.
 
@@ -12,9 +12,9 @@ Serverless media-processing for Next.js with S3 + Lambda (container images) + Re
 Use npx or install globally:
 
 ```bash
-npm install -D transflow
+npm install -D @xnetcat/transflow
 # or global
-npm i -g transflow
+npm i -g @xnetcat/transflow
 ```
 
 ### Quick start
@@ -118,7 +118,30 @@ See `docs/TEMPLATES.md` for full API details.
 
 ### GitHub Actions
 
-Copy `assets/workflows/deploy.yml` and `assets/workflows/cleanup.yml` into `.github/workflows/` and set repository secrets:
+Option A: Use the provided composite Action directly:
+
+```yaml
+name: Transflow Deploy
+on: [push]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: xnetcat/transflow@v0
+        with:
+          mode: deploy
+          branch: ${{ github.ref_name }}
+          sha: ${{ github.sha }}
+          config: transflow.config.json
+          yes: true
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+```
+
+Option B: Copy `assets/workflows/deploy.yml` and `assets/workflows/cleanup.yml` into `.github/workflows/` and set repository secrets:
 
 - `AWS_ROLE_ARN` — the OIDC role to assume in your AWS account
 - `AWS_REGION` — e.g. `us-east-1`
