@@ -1,7 +1,7 @@
-name: Transflow
+name: Transflow Pipelines
 description: Bake, deploy, and cleanup AWS Lambda media pipelines with Transflow
 branding:
-  icon: upload-cloud
+  icon: rocket
   color: blue
 inputs:
   mode:
