@@ -1,0 +1,87 @@
+{
+  "name": "@xnetcat/transflow",
+  "version": "0.1.0",
+  "description": "Transflow: serverless media-processing pipelines for Next.js (S3 + Lambda + Redis)",
+  "license": "MIT",
+  "author": "xnetcat <xnetcat.dev@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xnetcat/uploadflow.git"
+  },
+  "homepage": "https://github.com/xnetcat/uploadflow#readme",
+  "bugs": {
+    "url": "https://github.com/xnetcat/uploadflow/issues"
+  },
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./browser": {
+      "import": "./dist/browser.js",
+      "require": "./dist/browser.js"
+    }
+  },
+  "types": "dist/index.d.ts",
+  "bin": {
+    "transflow": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "dev": "tsc -w -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepare": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch-logs": "^3.645.0",
+    "@aws-sdk/client-dynamodb": "^3.645.0",
+    "@aws-sdk/client-ecr": "^3.645.0",
+    "@aws-sdk/client-iam": "^3.645.0",
+    "@aws-sdk/client-lambda": "^3.645.0",
+    "@aws-sdk/client-s3": "^3.645.0",
+    "@aws-sdk/credential-providers": "^3.645.0",
+    "@aws-sdk/lib-dynamodb": "^3.645.0",
+    "@aws-sdk/s3-request-presigner": "^3.645.0",
+    "@iarna/toml": "^2.2.5",
+    "chalk": "^5.3.0",
+    "esbuild": "^0.23.0",
+    "execa": "^8.0.1",
+    "fast-glob": "^3.3.2",
+    "ioredis": "^5.4.1",
+    "ora": "^8.0.1",
+    "semver": "^7.6.3",
+    "yargs": "^17.7.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/node": "^20.14.11",
+    "@types/yargs": "^17.0.32",
+    "aws-sdk-client-mock": "^3.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.5.2",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "peerDependencies": {
+    "react": ">=17",
+    "react-dom": ">=17"
+  }
+}

@@ -1,0 +1,30 @@
+name: Transflow Deploy
+
+on:
+  push:
+    branches: ["**"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Bake templates
+        run: npx transflow bake --config transflow.config.json
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: transflow-deploy
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Deploy
+        run: npx transflow deploy --branch "${{ github.ref_name }}" --sha "${{ github.sha }}" --config transflow.config.json --yes
+

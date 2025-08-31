@@ -1,0 +1,28 @@
+name: Transflow Cleanup
+
+on:
+  delete:
+    branches: ["**"]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: transflow-cleanup
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Cleanup
+        run: npx transflow cleanup --branch "${{ github.event.ref }}" --config transflow.config.json --yes
+
