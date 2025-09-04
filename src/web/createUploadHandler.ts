@@ -23,9 +23,7 @@ export function createUploadHandler(cfg: TransflowConfig) {
       return;
     }
     const isBatch = Array.isArray((req.body as any)?.files);
-    const filename = isBatch
-      ? undefined
-      : String(req.body?.filename ?? "");
+    const filename = isBatch ? undefined : String(req.body?.filename ?? "");
     const contentType = !isBatch
       ? typeof req.body?.contentType === "string"
         ? (req.body?.contentType as string)
@@ -79,7 +77,7 @@ export function createUploadHandler(cfg: TransflowConfig) {
       res.status(200).json({
         uploadId,
         presignedUrl,
-        channel: `upload:${uploadId}`,
+        channel: `upload:${branch}:${uploadId}`,
         key,
         bucket,
       });
@@ -125,7 +123,7 @@ export function createUploadHandler(cfg: TransflowConfig) {
     }
     res.status(200).json({
       uploadId,
-      channel: `upload:${uploadId}`,
+      channel: `upload:${branch}:${uploadId}`,
       baseKey,
       bucket,
       files: results,

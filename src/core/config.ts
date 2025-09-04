@@ -11,7 +11,7 @@ const ConfigSchema = z.object({
     mode: z.enum(["bucket", "prefix"]).default("prefix"),
     uploadBucket: z.string().optional(),
     outputBucket: z.string().optional(),
-    baseBucket: z.string().optional()
+    baseBucket: z.string().optional(),
   }),
   ecrRepo: z.string().min(1),
   lambdaPrefix: z.string().min(1),
@@ -21,20 +21,20 @@ const ConfigSchema = z.object({
     provider: z.enum(["upstash", "ioredis"]).default("upstash"),
     restUrl: z.string().optional(),
     token: z.string().optional(),
-    url: z.string().optional()
+    url: z.string().optional(),
   }),
   dynamoDb: z
     .object({
       enabled: z.boolean(),
-      tableName: z.string().optional()
+      tableName: z.string().optional(),
     })
     .optional(),
   lambda: z.object({
     memoryMb: z.number().int().min(128).default(2048),
     timeoutSec: z.number().int().min(1).max(900).default(900),
     architecture: z.enum(["x86_64", "arm64"]).optional(),
-    roleArn: z.string().optional()
-  })
+    roleArn: z.string().optional(),
+  }),
 });
 
 export function loadConfig(configPath?: string): TransflowConfig {
@@ -52,13 +52,17 @@ export function loadConfig(configPath?: string): TransflowConfig {
   }
   const parsed = ConfigSchema.safeParse(json);
   if (!parsed.success) {
-    const issues = parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ");
+    const issues = parsed.error.issues
+      .map((i) => `${i.path.join(".")}: ${i.message}`)
+      .join("; ");
     throw new Error(`Invalid config: ${issues}`);
   }
   const cfg = parsed.data as TransflowConfig;
   if (cfg.s3.mode === "prefix") {
     if (!cfg.s3.uploadBucket || !cfg.s3.outputBucket) {
-      throw new Error("s3.uploadBucket and s3.outputBucket are required in prefix mode");
+      throw new Error(
+        "s3.uploadBucket and s3.outputBucket are required in prefix mode"
+      );
     }
   }
   return cfg;
@@ -73,4 +77,3 @@ export function sanitizeBranch(branch: string): string {
     .replace(/^-+|-+$/g, "");
   return safe || "main";
 }
-

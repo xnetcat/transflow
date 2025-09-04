@@ -22,31 +22,73 @@ export function createStreamHandler(redisUrlOrFactory: string | (() => Redis)) {
   return async function handler(req: StreamRequest, res: StreamResponse) {
     const q = req.query || {};
     const channelParam = q["channel"];
-    const channel = Array.isArray(channelParam)
-      ? channelParam[0]
-      : channelParam || (req.url?.split("channel=")[1] ?? "");
-    if (!channel) {
+    const branchParam = q["branch"];
+
+    // Support both specific channel and branch-wide listening
+    let channels: string[] = [];
+
+    if (channelParam) {
+      const channel = Array.isArray(channelParam)
+        ? channelParam[0]
+        : channelParam || (req.url?.split("channel=")[1] ?? "");
+      if (channel) {
+        channels.push(channel);
+      }
+    }
+
+    // Optional: listen to all uploads for a specific branch
+    if (branchParam && !channelParam) {
+      const branch = Array.isArray(branchParam) ? branchParam[0] : branchParam;
+      if (branch) {
+        channels.push(`upload:${branch}:*`);
+      }
+    }
+
+    if (channels.length === 0) {
       res.status?.(400);
       res.end();
       return;
     }
+
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
     const redis = factory();
     const sub = redis.duplicate();
-    await sub.subscribe(channel);
+
+    // Subscribe to all specified channels/patterns
+    for (const channel of channels) {
+      if (channel.includes("*")) {
+        await sub.psubscribe(channel); // Pattern subscribe for wildcards
+      } else {
+        await sub.subscribe(channel); // Exact channel subscribe
+      }
+    }
+
     const heartbeat = setInterval(() => {
       res.write(`: ping\n\n`);
     }, 15000);
+
+    // Handle both regular messages and pattern messages
     sub.on("message", (_chan: string, message: string) => {
       res.write(`data: ${message}\n\n`);
     });
+
+    sub.on("pmessage", (_pattern: string, _chan: string, message: string) => {
+      res.write(`data: ${message}\n\n`);
+    });
+
     req.on("close", async () => {
       clearInterval(heartbeat);
       try {
-        await sub.unsubscribe(channel);
+        for (const channel of channels) {
+          if (channel.includes("*")) {
+            await sub.punsubscribe(channel);
+          } else {
+            await sub.unsubscribe(channel);
+          }
+        }
       } catch {}
       try {
         sub.disconnect();

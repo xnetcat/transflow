@@ -103,6 +103,7 @@ export async function deploy(args: DeployArgs) {
     exists = false;
   }
 
+  // Use shared Redis configuration across all branches
   const redisUrl = cfg.redis.url ?? "";
   const redisRestUrl = cfg.redis.restUrl ?? "";
   const redisToken = cfg.redis.token ?? "";
@@ -112,6 +113,7 @@ export async function deploy(args: DeployArgs) {
     const envVars: Record<string, string> = {
       TRANSFLOW_BRANCH: branch,
       AWS_REGION: region,
+      // Shared Redis instance for all branches
       REDIS_URL: redisUrl,
       REDIS_REST_URL: redisRestUrl,
       REDIS_REST_TOKEN: redisToken,
@@ -150,6 +152,7 @@ export async function deploy(args: DeployArgs) {
     const envVars: Record<string, string> = {
       TRANSFLOW_BRANCH: branch,
       AWS_REGION: region,
+      // Shared Redis instance for all branches
       REDIS_URL: redisUrl,
       REDIS_REST_URL: redisRestUrl,
       REDIS_REST_TOKEN: redisToken,

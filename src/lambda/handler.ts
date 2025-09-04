@@ -95,7 +95,8 @@ export const handler = async (event: S3EventLike) => {
       new HeadObjectCommand({ Bucket: bucket, Key: key })
     );
     const meta = (head.Metadata || {}) as Record<string, string>;
-    const uploadId = (meta.uploadid as string) || (meta.uploadId as string) || "";
+    const uploadId =
+      (meta.uploadid as string) || (meta.uploadId as string) || "";
     const templateId =
       (meta.templateid as string) ||
       (meta.templateId as string) ||
@@ -127,7 +128,9 @@ export const handler = async (event: S3EventLike) => {
   for (const [groupId, items] of groups) {
     const branch = process.env.TRANSFLOW_BRANCH || "";
     const first = items[0];
-    const channel = `upload:${groupId.replace(/^solo:/, "")}`;
+    // Branch-aware channel naming for multi-branch isolation
+    const uploadId = groupId.replace(/^solo:/, "");
+    const channel = `upload:${branch}:${uploadId}`;
     await publish(redis as any, channel, {
       type: "start",
       key: first.key,
@@ -144,8 +147,12 @@ export const handler = async (event: S3EventLike) => {
       const tpl: TemplateDefinition = mod.default;
 
       const tmpDir = fs.mkdtempSync(path.join("/tmp", `transflow-`));
-      const outputBucket = tpl.outputBucket || process.env.OUTPUT_BUCKET || first.bucket;
-      const outputPrefix = `outputs/${branch}/${groupId.replace(/^solo:/, "")}/`;
+      const outputBucket =
+        tpl.outputBucket || process.env.OUTPUT_BUCKET || first.bucket;
+      const outputPrefix = `outputs/${branch}/${groupId.replace(
+        /^solo:/,
+        ""
+      )}/`;
 
       // Download all inputs in this group
       const inputsLocalPaths: string[] = [];
@@ -165,7 +172,7 @@ export const handler = async (event: S3EventLike) => {
       }
 
       const ctx: StepContext = {
-        uploadId: groupId.replace(/^solo:/, ""),
+        uploadId,
         input: {
           bucket: first.bucket,
           key: first.key,
@@ -207,9 +214,15 @@ export const handler = async (event: S3EventLike) => {
       };
 
       for (const step of tpl.steps) {
-        await publish(redis as any, channel, { type: "step:start", step: step.name });
+        await publish(redis as any, channel, {
+          type: "step:start",
+          step: step.name,
+        });
         await step.run(ctx);
-        await publish(redis as any, channel, { type: "step:done", step: step.name });
+        await publish(redis as any, channel, {
+          type: "step:done",
+          step: step.name,
+        });
       }
 
       const result = {
@@ -217,14 +230,19 @@ export const handler = async (event: S3EventLike) => {
         templateId: first.templateId,
         input: { bucket: first.bucket, key: first.key },
         outputsPrefix: outputPrefix,
-        uploadId: groupId.replace(/^solo:/, ""),
+        uploadId,
+        branch,
       };
       if (ddbEnabled && ddb) {
+        // Branch-aware DynamoDB key structure for isolation
         await ddb.send(
           new PutCommand({
             TableName: process.env.DYNAMODB_TABLE,
             Item: {
-              jobId: groupId.replace(/^solo:/, ""),
+              // Composite key: branch#uploadId for isolation
+              jobId: `${branch}#${uploadId}`,
+              uploadId,
+              branch,
               ...result,
               updatedAt: Date.now(),
               createdAt: Date.now(),
