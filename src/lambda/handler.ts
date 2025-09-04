@@ -77,6 +77,16 @@ export const handler = async (event: S3EventLike) => {
   const ddb = ddbEnabled
     ? DynamoDBDocumentClient.from(new DynamoDBClient({ region }))
     : undefined;
+  // Expand, HEAD and group by uploadId
+  const expanded: Array<{
+    bucket: string;
+    key: string;
+    head: any;
+    meta: Record<string, string>;
+    uploadId: string;
+    templateId: string;
+    fields?: Record<string, string>;
+  }> = [];
 
   for (const record of event.Records ?? []) {
     const bucket = record.s3.bucket.name;
@@ -84,47 +94,86 @@ export const handler = async (event: S3EventLike) => {
     const head = await s3.send(
       new HeadObjectCommand({ Bucket: bucket, Key: key })
     );
-    const meta = head.Metadata || {};
-    const uploadId =
-      (meta.uploadid as string) || (meta.uploadId as string) || "";
+    const meta = (head.Metadata || {}) as Record<string, string>;
+    const uploadId = (meta.uploadid as string) || (meta.uploadId as string) || "";
     const templateId =
       (meta.templateid as string) ||
       (meta.templateId as string) ||
-      process.env.DEFAULT_TEMPLATE_ID ||
+      (process.env.DEFAULT_TEMPLATE_ID as string) ||
       "";
-    const branch = process.env.TRANSFLOW_BRANCH || "";
-    const channel = `upload:${uploadId}`;
+    let fields: Record<string, string> | undefined;
+    if (typeof meta.fields === "string") {
+      try {
+        const decoded = Buffer.from(meta.fields, "base64").toString("utf8");
+        const parsed = JSON.parse(decoded);
+        if (parsed && typeof parsed === "object") {
+          fields = Object.fromEntries(
+            Object.entries(parsed).map(([k, v]) => [k, String(v)])
+          );
+        }
+      } catch {}
+    }
+    expanded.push({ bucket, key, head, meta, uploadId, templateId, fields });
+  }
 
-    await publish(redis as any, channel, { type: "start", key, templateId });
+  const groups = new Map<string, typeof expanded>();
+  for (const rec of expanded) {
+    const id = rec.uploadId || `solo:${rec.bucket}:${rec.key}`;
+    const list = groups.get(id) || ([] as typeof expanded);
+    list.push(rec);
+    groups.set(id, list);
+  }
+
+  for (const [groupId, items] of groups) {
+    const branch = process.env.TRANSFLOW_BRANCH || "";
+    const first = items[0];
+    const channel = `upload:${groupId.replace(/^solo:/, "")}`;
+    await publish(redis as any, channel, {
+      type: "start",
+      key: first.key,
+      templateId: first.templateId,
+    });
 
     try {
       // Load baked template
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const index = require(path.join(process.cwd(), "templates.index.cjs"));
-      const mod = index[templateId];
+      const mod = index[first.templateId];
       if (!mod || !mod.default)
-        throw new Error(`Template not found: ${templateId}`);
+        throw new Error(`Template not found: ${first.templateId}`);
       const tpl: TemplateDefinition = mod.default;
 
       const tmpDir = fs.mkdtempSync(path.join("/tmp", `transflow-`));
-      const outputBucket = process.env.OUTPUT_BUCKET || bucket;
-      const outputPrefix = `outputs/${branch}/${uploadId}/`;
-      const inputLocalPath = path.join(tmpDir, path.basename(key));
-      const obj = await s3.send(
-        new GetObjectCommand({ Bucket: bucket, Key: key })
-      );
-      const stream = obj.Body as any as NodeJS.ReadableStream;
-      await new Promise<void>((resolve, reject) => {
-        const w = fs.createWriteStream(inputLocalPath);
-        stream.pipe(w);
-        w.on("finish", () => resolve());
-        w.on("error", reject);
-      });
+      const outputBucket = tpl.outputBucket || process.env.OUTPUT_BUCKET || first.bucket;
+      const outputPrefix = `outputs/${branch}/${groupId.replace(/^solo:/, "")}/`;
+
+      // Download all inputs in this group
+      const inputsLocalPaths: string[] = [];
+      for (const it of items) {
+        const p = path.join(tmpDir, path.basename(it.key));
+        const obj = await s3.send(
+          new GetObjectCommand({ Bucket: it.bucket, Key: it.key })
+        );
+        const stream = obj.Body as any as NodeJS.ReadableStream;
+        await new Promise<void>((resolve, reject) => {
+          const w = fs.createWriteStream(p);
+          stream.pipe(w);
+          w.on("finish", () => resolve());
+          w.on("error", reject);
+        });
+        inputsLocalPaths.push(p);
+      }
 
       const ctx: StepContext = {
-        uploadId,
-        input: { bucket, key },
-        inputLocalPath,
+        uploadId: groupId.replace(/^solo:/, ""),
+        input: {
+          bucket: first.bucket,
+          key: first.key,
+          contentType: first.head.ContentType as string | undefined,
+        },
+        inputLocalPath: inputsLocalPaths[0],
+        inputs: items.map((it) => ({ bucket: it.bucket, key: it.key })),
+        inputsLocalPaths,
         output: { bucket: outputBucket, prefix: outputPrefix },
         branch,
         awsRegion: region,
@@ -143,38 +192,39 @@ export const handler = async (event: S3EventLike) => {
                 ContentType: contentType,
               })
             );
+            await publish(redis as any, channel, {
+              type: "output",
+              name: path.basename(destKey),
+              bucket: outputBucket,
+              key: outKey,
+            });
             return { bucket: outputBucket, key: outKey };
           },
           generateKey: (basename) => `${outputPrefix}${basename}`,
           publish: (message) => publish(redis as any, channel, message),
         },
+        fields: first.fields,
       };
 
       for (const step of tpl.steps) {
-        await publish(redis as any, channel, {
-          type: "step:start",
-          step: step.name,
-        });
+        await publish(redis as any, channel, { type: "step:start", step: step.name });
         await step.run(ctx);
-        await publish(redis as any, channel, {
-          type: "step:done",
-          step: step.name,
-        });
+        await publish(redis as any, channel, { type: "step:done", step: step.name });
       }
 
       const result = {
         status: "completed",
-        templateId,
-        input: { bucket, key },
+        templateId: first.templateId,
+        input: { bucket: first.bucket, key: first.key },
         outputsPrefix: outputPrefix,
-        uploadId,
+        uploadId: groupId.replace(/^solo:/, ""),
       };
       if (ddbEnabled && ddb) {
         await ddb.send(
           new PutCommand({
             TableName: process.env.DYNAMODB_TABLE,
             Item: {
-              jobId: uploadId,
+              jobId: groupId.replace(/^solo:/, ""),
               ...result,
               updatedAt: Date.now(),
               createdAt: Date.now(),

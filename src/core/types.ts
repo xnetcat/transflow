@@ -46,6 +46,20 @@ export interface StepContextUtils {
     key: string,
     contentType?: string
   ) => Promise<{ bucket: string; key: string; url?: string }>;
+  uploadResults?: (
+    files: Array<{ localPath: string; key: string; contentType?: string }>
+  ) => Promise<Array<{ bucket: string; key: string }>>;
+  uploadToKey?: (
+    localPath: string,
+    absoluteKey: string,
+    contentType?: string
+  ) => Promise<{ bucket: string; key: string }>;
+  addArtifact?: (
+    name: string,
+    localPath: string,
+    contentType?: string,
+    absoluteKey?: string
+  ) => void;
   generateKey: (basename: string) => string;
   publish: (message: Record<string, unknown>) => Promise<void>;
 }
@@ -54,11 +68,16 @@ export interface StepContext {
   uploadId: string;
   input: { bucket: string; key: string; contentType?: string };
   inputLocalPath: string;
+  inputs?: Array<{ bucket: string; key: string; contentType?: string }>;
+  inputsLocalPaths?: string[];
   output: { bucket: string; prefix: string };
   branch: string;
   awsRegion: string;
   utils: StepContextUtils;
   tmpDir: string;
+  // Arbitrary, small metadata provided by the client at upload time
+  // (e.g., slug, timestamp, previewStartTime, previewEndTime)
+  fields?: Record<string, string>;
 }
 
 export interface TemplateStep {
@@ -69,6 +88,9 @@ export interface TemplateStep {
 export interface TemplateDefinition {
   id: string;
   outputPrefix?: string;
+  // Optional override for where results should be stored.
+  // If not provided, the handler will use OUTPUT_BUCKET env or fallback to the input bucket.
+  outputBucket?: string;
   steps: TemplateStep[];
 }
 
@@ -118,4 +140,5 @@ export type UploadEventMessage =
       outputsPrefix: string;
       input: { bucket: string; key: string };
     }
+  | { type: "output"; name: string; bucket: string; key: string }
   | { type: "error"; message: string };

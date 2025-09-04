@@ -22,16 +22,26 @@ export function createUploadHandler(cfg: TransflowConfig) {
       res.status(405).json({ error: "Method not allowed" });
       return;
     }
-    const filename = String(req.body?.filename ?? "");
-    const contentType =
-      typeof req.body?.contentType === "string"
+    const isBatch = Array.isArray((req.body as any)?.files);
+    const filename = isBatch
+      ? undefined
+      : String(req.body?.filename ?? "");
+    const contentType = !isBatch
+      ? typeof req.body?.contentType === "string"
         ? (req.body?.contentType as string)
-        : "application/octet-stream";
+        : "application/octet-stream"
+      : undefined;
     const templateId =
-      typeof req.body?.templateId === "string"
+      typeof req.body?.template === "string"
+        ? (req.body?.template as string)
+        : typeof req.body?.templateId === "string"
         ? (req.body?.templateId as string)
         : "";
-    if (!filename) {
+    const fields =
+      req.body?.fields && typeof req.body.fields === "object"
+        ? (req.body.fields as Record<string, unknown>)
+        : undefined;
+    if (!isBatch && !filename) {
       res.status(400).json({ error: "filename required" });
       return;
     }
@@ -45,24 +55,80 @@ export function createUploadHandler(cfg: TransflowConfig) {
         : undefined) ||
       process.env.TRANSFLOW_BRANCH ||
       "main";
-    const key = `uploads/${branch}/${uploadId}/${filename}`;
+    const baseKey = `uploads/${branch}/${uploadId}`;
     const bucket =
       cfg.s3.mode === "prefix"
         ? (cfg.s3.uploadBucket as string)
         : `${cfg.project}-${branch}`;
-    const put = new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      ContentType: contentType,
-      Metadata: { templateid: templateId, uploadid: uploadId },
-    });
-    const presignedUrl = await getSignedUrl(s3, put, { expiresIn: 3600 });
+    if (!isBatch) {
+      const key = `${baseKey}/${filename}`;
+      const put = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: contentType,
+        Metadata: {
+          templateid: templateId,
+          uploadid: uploadId,
+          "content-type": contentType,
+          ...(fields
+            ? { fields: Buffer.from(JSON.stringify(fields)).toString("base64") }
+            : {}),
+        },
+      });
+      const presignedUrl = await getSignedUrl(s3, put, { expiresIn: 3600 });
+      res.status(200).json({
+        uploadId,
+        presignedUrl,
+        channel: `upload:${uploadId}`,
+        key,
+        bucket,
+      });
+      return;
+    }
+
+    // Batch mode: issue multiple pre-signed URLs for provided files
+    const files = (req.body as any).files as Array<{
+      filename: string;
+      contentType?: string;
+      dir?: string; // optional subdir within uploadId
+    }>;
+    if (!Array.isArray(files) || files.length === 0) {
+      res.status(400).json({ error: "files array required" });
+      return;
+    }
+    const results: Array<{
+      filename: string;
+      key: string;
+      presignedUrl: string;
+      bucket: string;
+    }> = [];
+    for (const f of files) {
+      const safeName = String(f.filename || "");
+      if (!safeName) continue;
+      const ct = typeof f.contentType === "string" ? f.contentType : undefined;
+      const dir = f.dir ? String(f.dir).replace(/^\/+|\/+$/g, "") + "/" : "";
+      const key = `${baseKey}/${dir}${safeName}`;
+      const put = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: ct,
+        Metadata: {
+          templateid: templateId,
+          uploadid: uploadId,
+          ...(fields
+            ? { fields: Buffer.from(JSON.stringify(fields)).toString("base64") }
+            : {}),
+        },
+      });
+      const presignedUrl = await getSignedUrl(s3, put, { expiresIn: 3600 });
+      results.push({ filename: safeName, key, presignedUrl, bucket });
+    }
     res.status(200).json({
       uploadId,
-      presignedUrl,
       channel: `upload:${uploadId}`,
-      key,
+      baseKey,
       bucket,
+      files: results,
     });
   };
 }

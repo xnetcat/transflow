@@ -19,64 +19,85 @@ npm i -g @xnetcat/transflow
 
 ### Quick start
 
-1. Create `transflow.config.json` in your app repo (copy and edit from `assets/transflow.config.sample.json`).
+1. Create `transflow.config.js` in your app repo (JS format so you can use env vars). You can still use JSON, but JS is recommended.
 
-```json
-{
-  "project": "myapp",
-  "region": "us-east-1",
-  "s3": {
-    "mode": "prefix",
-    "uploadBucket": "myapp-uploads",
-    "outputBucket": "myapp-outputs"
+```js
+module.exports = {
+  project: process.env.TRANSFLOW_PROJECT || "myapp",
+  region:
+    process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1",
+  s3: {
+    mode: process.env.TRANSFLOW_S3_MODE || "prefix",
+    uploadBucket: process.env.TRANSFLOW_UPLOAD_BUCKET || "myapp-uploads",
+    outputBucket: process.env.TRANSFLOW_OUTPUT_BUCKET || "myapp-outputs",
   },
-  "ecrRepo": "transflow-worker",
-  "lambdaPrefix": "transflow-worker-",
-  "templatesDir": "./templates",
-  "lambdaBuildContext": "./lambda",
-  "redis": {
-    "provider": "upstash",
-    "restUrl": "https://xxx.upstash.io",
-    "token": "UPSTASH_TOKEN"
+  ecrRepo: process.env.TRANSFLOW_ECR_REPO || "transflow-worker",
+  lambdaPrefix: process.env.TRANSFLOW_LAMBDA_PREFIX || "transflow-worker-",
+  templatesDir: process.env.TRANSFLOW_TEMPLATES_DIR || "./templates",
+  lambdaBuildContext: process.env.TRANSFLOW_BUILD_CONTEXT || "./lambda",
+  redis: {
+    provider: process.env.TRANSFLOW_REDIS_PROVIDER || "upstash",
+    restUrl: process.env.REDIS_REST_URL,
+    token: process.env.REDIS_TOKEN,
+    url: process.env.REDIS_URL,
   },
-  "dynamoDb": { "enabled": true, "tableName": "TransflowJobs" },
-  "lambda": {
-    "memoryMb": 2048,
-    "timeoutSec": 900,
-    "roleArn": "arn:aws:iam::<ACCOUNT_ID>:role/transflow-lambda-role"
-  }
-}
+  dynamoDb: {
+    enabled: process.env.TRANSFLOW_DDB_ENABLED === "true",
+    tableName: process.env.TRANSFLOW_DDB_TABLE,
+  },
+  lambda: {
+    memoryMb: Number(process.env.TRANSFLOW_LAMBDA_MEMORY_MB || 2048),
+    timeoutSec: Number(process.env.TRANSFLOW_LAMBDA_TIMEOUT_SEC || 900),
+    roleArn: process.env.TRANSFLOW_LAMBDA_ROLE_ARN,
+  },
+};
 ```
 
-2. Put templates in `./templates/*.ts` (see Template API below).
+2. Put templates in `./templates/*.ts` (see Template API below). Each template is a separate file, no Transloadit robots. Use TypeScript to orchestrate ffmpeg/ffprobe and `uploadResult()`.
 
 3. Bake and deploy per-branch:
 
 ```bash
-transflow bake --config transflow.config.json
-transflow deploy --branch feature-x --sha <commit-sha> --config transflow.config.json --yes
+transflow bake --config transflow.config.js
+transflow deploy --branch feature-x --sha <commit-sha> --config transflow.config.js --yes
 ```
 
 4. Next.js routes (use the package helpers):
 
 ```ts
-// pages/api/create-upload.ts
-import { createUploadHandler } from "@xnetcat/transflow";
-import cfg from "../../transflow.config.json";
-export default createUploadHandler(cfg);
+// pages/api/transflow/create-upload.ts
+import { createUploadHandler, type TransflowConfig } from "@xnetcat/transflow";
+// CommonJS import of JS config
+// eslint-disable-next-line
+const cfg = require("../../transflow.config.js") as TransflowConfig;
+export default function handler(req, res) {
+  const h = createUploadHandler(cfg);
+  return h(req, res);
+}
 ```
 
 ```ts
-// pages/api/stream.ts
+// pages/api/transflow/stream.ts
 import { createStreamHandler } from "@xnetcat/transflow";
 export default createStreamHandler(process.env.REDIS_URL!);
 ```
 
-5. In your UI:
+5. In your UI (optionally use provider for default endpoints):
 
 ```tsx
-import { Uploader } from "@xnetcat/transflow";
-<Uploader action="/api/create-upload" onUpdate={(m) => console.log(m)} />;
+import { Uploader, TransflowProvider } from "@xnetcat/transflow";
+<TransflowProvider
+  endpoints={{
+    action: "/api/transflow/create-upload",
+    stream: "/api/transflow/stream",
+  }}
+>
+  <Uploader
+    template="bushido_staging_media"
+    multiple
+    onUpdate={(m) => console.log(m)}
+  />
+</TransflowProvider>;
 ```
 
 ### CLI commands
@@ -96,7 +117,7 @@ import { Uploader } from "@xnetcat/transflow";
 
 ### Template authoring (TypeScript)
 
-Templates export a `TemplateDefinition` with `id` and `steps[]`. Each step is an async function receiving a `StepContext` with helpers.
+Templates export a `TemplateDefinition` with `id` and `steps[]`. Each step is an async function receiving a `StepContext` with helpers. No Transloadit robots — you write plain TS. You can process multiple inputs and emit multiple outputs in one go.
 
 ```ts
 import type { TemplateDefinition, StepContext } from "@xnetcat/transflow";
@@ -174,6 +195,13 @@ Env vars used by the Lambda:
 
 - `REDIS_URL` or `REDIS_REST_URL` + `REDIS_REST_TOKEN`
 - `TRANSFLOW_BRANCH`, `OUTPUT_BUCKET`, and optionally `DYNAMODB_TABLE`
+- When uploading, the client may include arbitrary `fields` in the request; they are exposed on `ctx.fields` in the worker.
+
+### Multi-file inputs and batched outputs
+
+- The create-upload endpoint supports sending `{ files: [{ filename, contentType }], template, fields }` to issue multiple pre-signed URLs in one go under a single `uploadId`.
+- The worker groups S3 events by `uploadId`, downloads all files, and populates `ctx.inputs` and `ctx.inputsLocalPaths` in addition to `ctx.input`/`ctx.inputLocalPath`.
+- Use `ctx.utils.uploadResult()` or `ctx.utils.uploadResults()` to emit one or many outputs; each upload also publishes an `output` event with the final S3 key to the SSE stream.
 
 ### Local development
 
