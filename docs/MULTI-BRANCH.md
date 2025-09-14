@@ -6,24 +6,24 @@ Transflow uses **shared resources with branch isolation** - enabling cost-effect
 
 Transflow automatically provides:
 
-- **Single Redis instance** serves all branches
+- **Single SQS processing queue** for all branches
+- **Single SQS progress queue** for real-time updates
 - **Single DynamoDB table** with branch-isolated composite keys
-- **Branch-aware Redis channels** (`upload:{branch}:{uploadId}`)
-- **Centralized monitoring** with branch filtering capabilities
+- **Branch-aware channels** (`upload:{branch}:{uploadId}`) in message payloads
 
 ## Configuration
 
-All branches share the same Redis and DynamoDB resources with automatic isolation:
+All branches share the same SQS and DynamoDB resources with automatic isolation:
 
 ```js
 module.exports = {
-  // ... other config
-
-  // Single Redis instance serves all branches automatically
-  redis: {
-    provider: "upstash",
-    restUrl: process.env.REDIS_REST_URL,
-    token: process.env.REDIS_TOKEN,
+  // Single SQS queues shared across all branches
+  sqs: {
+    queueName: "myapp-processing.fifo",
+    progressQueueName: "myapp-progress.fifo",
+    visibilityTimeoutSec: 960,
+    maxReceiveCount: 3,
+    batchSize: 10,
   },
 
   // Single DynamoDB table with automatic branch isolation
@@ -34,11 +34,11 @@ module.exports = {
 };
 ```
 
-## Redis Channel Structure
+## Channel Structure
 
 ### Branch-Aware Channels
 
-All Redis channels now include the branch name:
+All progress messages include the branch name in a channel identifier:
 
 ```
 Format: upload:{branch}:{uploadId}
@@ -221,9 +221,9 @@ async function testMultipleBranches() {
 
 ### Considerations
 
-- **Redis Load**: More total traffic through single instance
+- **SQS costs**: Long-polling and throughput
 - **DynamoDB Hot Keys**: Branch distribution affects performance
-- **Channel Filtering**: Pattern subscriptions use more CPU
+- **Stream backpressure**: Throttle SSE writes if needed
 
 ### Scaling Recommendations
 
@@ -257,20 +257,11 @@ dynamoDb: {
 - Use time prefix in composite keys if needed
 - Monitor partition metrics in CloudWatch
 
-**Redis connection limits**
-
-- Monitor connection count in Upstash dashboard
-- Consider connection pooling for high-volume branches
+Remove Redis entirely; use SQS.
 
 ### Debug Commands
 
 ```bash
-# Check Redis channels
-redis-cli --scan --pattern "upload:*"
-
-# Monitor specific branch
-redis-cli psubscribe "upload:main:*"
-
 # Query DynamoDB by branch
 aws dynamodb query --table-name TransflowJobs \
   --index-name BranchIndex \

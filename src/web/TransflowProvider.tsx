@@ -2,12 +2,12 @@ import React, { createContext, useContext } from "react";
 
 export interface TransflowEndpoints {
   action: string; // create-upload endpoint
-  stream: string; // stream endpoint
+  status: string; // status polling endpoint
 }
 
 const DefaultEndpoints: TransflowEndpoints = {
   action: "/api/transflow/create-upload",
-  stream: "/api/transflow/stream",
+  status: "/api/transflow/status",
 };
 
 const Ctx = createContext<TransflowEndpoints>(DefaultEndpoints);
@@ -21,7 +21,7 @@ export function TransflowProvider({
 }) {
   const value: TransflowEndpoints = {
     action: endpoints?.action || DefaultEndpoints.action,
-    stream: endpoints?.stream || DefaultEndpoints.stream,
+    status: endpoints?.status || DefaultEndpoints.status,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

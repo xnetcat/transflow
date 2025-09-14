@@ -20,8 +20,14 @@ const cfg: TransflowConfig = {
   lambdaPrefix: "lp-",
   templatesDir: "./t",
   lambdaBuildContext: "./l",
-  redis: { provider: "upstash", restUrl: "u", token: "t" },
+  dynamoDb: { tableName: "test-table" },
   lambda: { memoryMb: 512, timeoutSec: 60 },
+  sqs: {
+    queueName: "test-processing.fifo",
+    visibilityTimeoutSec: 960,
+    maxReceiveCount: 3,
+    batchSize: 10,
+  },
 };
 
 describe("createUploadHandler", () => {
@@ -34,7 +40,12 @@ describe("createUploadHandler", () => {
     };
     const req = {
       method: "POST",
-      body: { filename: "a.txt", contentType: "text/plain", templateId: "t1" },
+      body: {
+        filename: "a.txt",
+        contentType: "text/plain",
+        templateId: "t1",
+        fileHash: "abc123",
+      },
       headers: {},
     };
     // We cannot actually sign without AWS credentials; just assert it runs until presign call.
@@ -45,7 +56,7 @@ describe("createUploadHandler", () => {
     }
   });
 
-  it("generates branch-aware channel names", async () => {
+  it("generates assembly_id for single uploads", async () => {
     const handler = createUploadHandler(cfg);
     const res: any = {
       status: vi.fn().mockReturnThis(),
@@ -53,13 +64,14 @@ describe("createUploadHandler", () => {
       setHeader: vi.fn(),
     };
 
-    // Test with explicit branch header
+    // Test with explicit branch header and fileHash
     const req = {
       method: "POST",
       body: {
         filename: "test.txt",
         contentType: "text/plain",
         templateId: "t1",
+        fileHash: "abc123def456",
       },
       headers: { "x-transflow-branch": "feature-x" },
     };
@@ -68,12 +80,13 @@ describe("createUploadHandler", () => {
 
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: expect.stringMatching(/^upload:feature-x:/),
+        assembly_id: expect.any(String),
+        uploadId: expect.any(String),
       })
     );
   });
 
-  it("defaults to main branch when no branch header provided", async () => {
+  it("requires fileHash for single uploads", async () => {
     const handler = createUploadHandler(cfg);
     const res: any = {
       status: vi.fn().mockReturnThis(),
@@ -87,20 +100,20 @@ describe("createUploadHandler", () => {
         filename: "test.txt",
         contentType: "text/plain",
         templateId: "t1",
+        // Missing fileHash
       },
       headers: {}, // No branch header
     };
 
     await handler(req as any, res);
 
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: expect.stringMatching(/^upload:main:/),
-      })
-    );
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "fileHash required for single file upload",
+    });
   });
 
-  it("generates branch-aware channels for batch uploads", async () => {
+  it("requires md5hash for all batch uploads", async () => {
     const handler = createUploadHandler(cfg);
     const res: any = {
       status: vi.fn().mockReturnThis(),
@@ -112,8 +125,12 @@ describe("createUploadHandler", () => {
       method: "POST",
       body: {
         files: [
-          { filename: "file1.txt", contentType: "text/plain" },
-          { filename: "file2.txt", contentType: "text/plain" },
+          {
+            filename: "file1.txt",
+            contentType: "text/plain",
+            md5hash: "hash1",
+          },
+          { filename: "file2.txt", contentType: "text/plain" }, // Missing md5hash
         ],
         templateId: "t1",
       },
@@ -122,10 +139,10 @@ describe("createUploadHandler", () => {
 
     await handler(req as any, res);
 
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: expect.stringMatching(/^upload:staging:/),
-      })
-    );
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      error:
+        "md5hash required for all files in batch upload. Missing for: file2.txt",
+    });
   });
 });

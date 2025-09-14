@@ -11,12 +11,23 @@ vi.mock("@aws-sdk/client-ecr", () => ({
 vi.mock("@aws-sdk/client-lambda", () => ({
   LambdaClient: vi
     .fn()
-    .mockImplementation(() => ({ send: vi.fn(async () => ({})) })),
+    .mockImplementation(() => ({ 
+      send: vi.fn(async (command) => {
+        // Mock Lambda function exists check to return "not found" initially
+        if (command.constructor.name === "GetFunctionCommand") {
+          throw new Error("Function not found");
+        }
+        return {};
+      })
+    })),
   CreateFunctionCommand: class {},
   UpdateFunctionCodeCommand: class {},
   UpdateFunctionConfigurationCommand: class {},
   GetFunctionCommand: class {},
   AddPermissionCommand: class {},
+  PutFunctionConcurrencyCommand: class {},
+  CreateEventSourceMappingCommand: class {},
+  ListEventSourceMappingsCommand: class {},
 }));
 
 vi.mock("@aws-sdk/client-s3", () => ({
@@ -27,6 +38,29 @@ vi.mock("@aws-sdk/client-s3", () => ({
   PutBucketNotificationConfigurationCommand: class {},
   GetBucketNotificationConfigurationCommand: class {},
   HeadBucketCommand: class {},
+}));
+
+vi.mock("@aws-sdk/client-sqs", () => ({
+  SQSClient: vi
+    .fn()
+    .mockImplementation(() => ({ 
+      send: vi.fn(async (command) => {
+        // Mock different responses for different commands
+        if (command.constructor.name === "CreateQueueCommand") {
+          return { QueueUrl: "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue.fifo" };
+        }
+        if (command.constructor.name === "GetQueueAttributesCommand") {
+          return { Attributes: {} };
+        }
+        if (command.constructor.name === "SetQueueAttributesCommand") {
+          return {};
+        }
+        return {};
+      })
+    })),
+  CreateQueueCommand: class {},
+  GetQueueAttributesCommand: class {},
+  SetQueueAttributesCommand: class {},
 }));
 
 vi.mock("execa", () => ({
@@ -41,11 +75,17 @@ const cfg = {
   lambdaPrefix: "lp-",
   templatesDir: "./t",
   lambdaBuildContext: ".",
-  redis: { provider: "upstash", restUrl: "u", token: "t" },
+  dynamoDb: { tableName: "test-table" },
   lambda: {
     memoryMb: 512,
     timeoutSec: 60,
     roleArn: "arn:aws:iam::123:role/role",
+  },
+  sqs: {
+    queueName: "test-processing.fifo",
+    visibilityTimeoutSec: 960,
+    maxReceiveCount: 3,
+    batchSize: 10,
   },
 } as const;
 

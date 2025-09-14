@@ -1,0 +1,55 @@
+{
+  "project": "my-secure-app",
+  "region": "us-east-1",
+  "s3": {
+    "mode": "prefix",
+    "uploadBucket": "my-secure-app-uploads",
+    "outputBucket": "my-secure-app-outputs",
+    "userIsolation": true,
+    "maxFileSize": 104857600,
+    "allowedContentTypes": [
+      "image/jpeg",
+      "image/png",
+      "image/gif",
+      "image/webp",
+      "video/mp4",
+      "video/avi",
+      "video/mov",
+      "video/quicktime",
+      "audio/mpeg",
+      "audio/wav",
+      "audio/aac",
+      "application/pdf"
+    ]
+  },
+  "ecrRepo": "my-secure-app-worker",
+  "lambdaPrefix": "secure-worker-",
+  "templatesDir": "./templates",
+  "lambdaBuildContext": "./lambda-build",
+  "lambda": {
+    "memoryMb": 2048,
+    "timeoutSec": 900,
+    "architecture": "x86_64",
+    "roleArn": "arn:aws:iam::123456789012:role/TransflowSecureExecutionRole",
+    "reservedConcurrency": 50,
+    "maxBatchSize": 3
+  },
+  "sqs": {
+    "queueName": "my-secure-app-processing.fifo",
+    "progressQueueName": "my-secure-app-progress.fifo",
+    "visibilityTimeoutSec": 960,
+    "maxReceiveCount": 3,
+    "batchSize": 5
+  },
+  "auth": {
+    "requireAuth": true,
+    "jwtSecret": "your-256-bit-secret-from-env",
+    "jwtIssuer": "your-app.com",
+    "userIdClaim": "sub",
+    "sessionCookieName": "session"
+  },
+  "dynamoDb": {
+    "enabled": true,
+    "tableName": "TransflowSecureJobs"
+  }
+}

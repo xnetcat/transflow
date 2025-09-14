@@ -326,51 +326,35 @@ aws lambda get-function-configuration --function-name transflow-worker-main \
   --query 'Environment.Variables'
 ```
 
-Check Next.js API route:
+Check Next.js API route (SQS-based SSE):
 
 ```ts
 // pages/api/transflow/stream.ts
-import { createStreamHandler } from "@xnetcat/transflow";
+import type { NextApiRequest, NextApiResponse } from "next";
+import { createStreamHandler } from "@xnetcat/transflow/web/createStreamHandler";
+import config from "../../../transflow.config"; // JS config
 
-// Ensure Redis URL is correct
-const redisUrl = process.env.REDIS_URL;
-if (!redisUrl) {
-  throw new Error("REDIS_URL environment variable is required");
-}
+const handler = createStreamHandler(config);
 
-export default createStreamHandler(redisUrl);
-```
-
-### Redis connection timeout
-
-**Error**: `Error: connect ETIMEDOUT` in Lambda logs.
-
-**Cause**: Network connectivity issues or incorrect Redis URL.
-
-**Solution**:
-
-```bash
-# Verify Redis URL format
-# For Upstash: rediss://default:password@host:port
-# For standard Redis: redis://host:port
-
-# Check if Lambda is in VPC (might block internet access)
-aws lambda get-function-configuration --function-name transflow-worker-main \
-  --query 'VpcConfig'
-
-# If in VPC, ensure NAT Gateway for internet access
-```
-
-Use Upstash REST API as fallback:
-
-```js
-// In config
-redis: {
-  provider: "upstash",
-  restUrl: process.env.REDIS_REST_URL,  // REST endpoint
-  token: process.env.REDIS_REST_TOKEN   // REST token
+export default function api(req: NextApiRequest, res: NextApiResponse) {
+  return handler(req as any, res as any);
 }
 ```
+
+### No progress updates
+
+**Error**: No SSE messages arriving at client.
+
+**Causes & Fixes**:
+
+- SQS progress queue URL is missing
+  - Ensure `SQS_PROGRESS_QUEUE_URL` is set on Lambda and stream server
+  - Ensure the queue exists and is in the right region
+- Stream handler not filtering by correct channel
+  - Verify channel format: `upload:{branch}:{uploadId}`
+  - Ensure the SSE endpoint is called with `?uploadId={id}` and correct branch
+- IAM permissions missing for SQS
+  - Attach policy allowing `ReceiveMessage`, `DeleteMessage` on progress queue
 
 ## Template Issues
 

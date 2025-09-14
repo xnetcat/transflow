@@ -234,7 +234,7 @@ graph TB
 
 **Data Layer**
 
-- **Redis**: Real-time progress streaming via pub/sub channels
+- **SQS**: Messaging for processing (jobs) and progress (real-time updates)
 - **DynamoDB**: Optional job persistence and metadata storage
 
 ### 🌍 Runtime & Client
@@ -248,7 +248,7 @@ graph TB
 **API Endpoints**
 
 - `create-upload`: Generates pre-signed S3 URLs with metadata
-- `stream`: SSE endpoint for Redis pub/sub messages
+- `stream`: SSE endpoint backed by SQS progress queue
 - Both integrate seamlessly with Next.js API routes
 
 **File Upload Flow**
@@ -256,7 +256,7 @@ graph TB
 1. Browser requests pre-signed URL with template ID
 2. File uploaded directly to S3 with metadata
 3. S3 event triggers Lambda function
-4. Processing progress streamed via Redis → SSE
+4. Processing progress streamed via SQS → SSE
 
 ### 🎬 Media Processing
 
@@ -268,7 +268,7 @@ graph TB
 
 **Progress Publishing**
 
-- Real-time updates published to Redis channels
+- Real-time updates published to SQS progress queue (with channel field)
 - Step start/completion, ffprobe output, errors
 - Channel naming: `upload:{branch}:{uploadId}` for branch isolation
 
@@ -295,12 +295,12 @@ Browser → Pre-signed URL → S3 Upload → S3 Event → Lambda → ffmpeg → 
 ### 3. Real-time Updates
 
 ```
-Lambda Progress → Redis Pub/Sub → SSE Endpoint → Browser EventSource
+Lambda Progress → SQS Progress Queue → SSE Endpoint → Browser EventSource
 ```
 
 ## Branch Isolation
 
-Transflow uses **shared resources with branch isolation** - a single Redis instance and DynamoDB table serve all branches while maintaining complete data separation.
+Transflow uses **shared resources with branch isolation** - a single SQS (processing + progress) and DynamoDB table serve all branches while maintaining complete data separation.
 
 ### S3 Storage Isolation
 

@@ -1,0 +1,92 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3AccessForProcessing",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging"],
+      "Resource": [
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET/uploads/*",
+        "arn:aws:s3:::YOUR_OUTPUT_BUCKET/outputs/*"
+      ]
+    },
+    {
+      "Sid": "S3WriteOutputs",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:PutObjectAcl", "s3:PutObjectTagging"],
+      "Resource": ["arn:aws:s3:::YOUR_OUTPUT_BUCKET/outputs/*"]
+    },
+    {
+      "Sid": "S3ListBuckets",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET",
+        "arn:aws:s3:::YOUR_OUTPUT_BUCKET"
+      ],
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["uploads/*", "outputs/*"]
+        }
+      }
+    },
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    },
+    {
+      "Sid": "DynamoDBAccess",
+      "Effect": "Allow",
+      "Action": ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:*:*:table/YOUR_TABLE_NAME",
+      "Condition": {
+        "ForAllValues:StringLike": {
+          "dynamodb:Attributes": [
+            "assembly_id",
+            "branch",
+            "template_id",
+            "user",
+            "uploads",
+            "results",
+            "ok",
+            "error",
+            "message",
+            "execution_start",
+            "created_at",
+            "updated_at"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "SQSProcessing",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "arn:aws:sqs:*:*:*-processing*"
+    },
+    {
+      "Sid": "DenyUnencryptedUploads",
+      "Effect": "Deny",
+      "Action": ["s3:PutObject"],
+      "Resource": [
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET/*",
+        "arn:aws:s3:::YOUR_OUTPUT_BUCKET/*"
+      ],
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption": "AES256"
+        }
+      }
+    }
+  ]
+}

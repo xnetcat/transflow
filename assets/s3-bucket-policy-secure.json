@@ -1,0 +1,98 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyDirectPublicAccess",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET",
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET/*"
+      ],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalServiceName": [
+            "lambda.amazonaws.com",
+            "s3.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "AllowLambdaFullAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::YOUR_ACCOUNT_ID:role/YOUR_LAMBDA_EXECUTION_ROLE"
+      },
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET",
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET/*"
+      ]
+    },
+    {
+      "Sid": "AllowUserSpecificUploads",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:PutObject"],
+      "Resource": "arn:aws:s3:::YOUR_UPLOAD_BUCKET/uploads/*/users/${aws:userid}/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:x-amz-server-side-encryption": "AES256"
+        },
+        "NumericLessThan": {
+          "s3:max-keys": "100"
+        }
+      }
+    },
+    {
+      "Sid": "AllowUserSpecificReads",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::YOUR_UPLOAD_BUCKET/outputs/*/users/${aws:userid}/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:ExistingObjectTag/userId": "${aws:userid}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyAccessToOtherUsers",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::YOUR_UPLOAD_BUCKET/*/users/*",
+      "Condition": {
+        "StringNotLike": {
+          "s3:prefix": [
+            "uploads/*/users/${aws:userid}/*",
+            "outputs/*/users/${aws:userid}/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "EnforceSSLOnly",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET",
+        "arn:aws:s3:::YOUR_UPLOAD_BUCKET/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    }
+  ]
+}
+

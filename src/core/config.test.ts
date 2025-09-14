@@ -4,7 +4,7 @@ import path from "path";
 import { loadConfig, sanitizeBranch } from "./config";
 
 describe("config", () => {
-  it("loads valid config", () => {
+  it("loads valid config", async () => {
     const tmp = path.join(process.cwd(), "tmp-config.json");
     const cfg = {
       project: "myapp",
@@ -14,11 +14,19 @@ describe("config", () => {
       lambdaPrefix: "lp-",
       templatesDir: "./templates",
       lambdaBuildContext: "./lambda",
-      redis: { provider: "upstash", restUrl: "u", token: "t" },
+      dynamoDb: {
+        tableName: "test-table",
+      },
       lambda: { memoryMb: 512, timeoutSec: 60 },
+      sqs: {
+        queueName: "test-processing.fifo",
+        visibilityTimeoutSec: 960,
+        maxReceiveCount: 3,
+        batchSize: 10,
+      },
     };
     fs.writeFileSync(tmp, JSON.stringify(cfg));
-    const loaded = loadConfig(tmp);
+    const loaded = await loadConfig(tmp);
     fs.unlinkSync(tmp);
     expect(loaded.project).toBe("myapp");
     expect(loaded.s3.mode).toBe("prefix");

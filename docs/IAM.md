@@ -253,7 +253,7 @@ The Lambda execution role needs permissions to access S3, publish to Redis, and 
 }
 ```
 
-### DynamoDB Access (Optional)
+### DynamoDB Access (Required)
 
 ```json
 {
@@ -261,14 +261,8 @@ The Lambda execution role needs permissions to access S3, publish to Redis, and 
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": [
-        "dynamodb:PutItem",
-        "dynamodb:GetItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:Query",
-        "dynamodb:Scan"
-      ],
-      "Resource": "arn:aws:dynamodb:*:*:table/TransflowJobs"
+      "Action": ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:*:*:table/YOUR_TABLE_NAME"
     }
   ]
 }
@@ -382,7 +376,7 @@ The Lambda execution role needs permissions to access S3, publish to Redis, and 
       "Sid": "DynamoDBAccess",
       "Effect": "Allow",
       "Action": ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
-      "Resource": "arn:aws:dynamodb:*:*:table/TransflowJobs"
+      "Resource": "arn:aws:dynamodb:*:*:table/YOUR_TABLE_NAME"
     }
   ]
 }

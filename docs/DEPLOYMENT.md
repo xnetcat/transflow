@@ -22,8 +22,7 @@ npx transflow check
 - **AWS Account** with programmatic access
 - **IAM permissions** for ECR, Lambda, S3, CloudWatch (see [IAM Guide](IAM.md))
 - **ECR repository** (created automatically)
-- **S3 buckets** (created automatically)
-- **Redis instance** (Upstash recommended)
+- **S3 buckets** (explicitly listed in config; created if missing; never deleted)
 
 ## Configuration
 
@@ -38,10 +37,15 @@ module.exports = {
 
   // S3 configuration
   s3: {
-    mode: process.env.TRANSFLOW_S3_MODE || "prefix", // "prefix" | "bucket"
-    uploadBucket: process.env.TRANSFLOW_UPLOAD_BUCKET || "myapp-uploads", // prefix mode
-    outputBucket: process.env.TRANSFLOW_OUTPUT_BUCKET || "myapp-outputs", // prefix mode
-    baseBucket: process.env.TRANSFLOW_BASE_BUCKET || "myapp", // bucket mode base name
+    // Explicit list of buckets to ensure exist (never deleted)
+    buckets: [
+      process.env.TRANSFLOW_UPLOAD_BUCKET || "myapp-uploads",
+      process.env.TRANSFLOW_OUTPUT_BUCKET || "myapp-outputs",
+    ],
+    // Optional legacy prefix mode (kept for back-compat)
+    mode: process.env.TRANSFLOW_S3_MODE || "prefix",
+    uploadBucket: process.env.TRANSFLOW_UPLOAD_BUCKET || "myapp-uploads",
+    outputBucket: process.env.TRANSFLOW_OUTPUT_BUCKET || "myapp-outputs",
   },
 
   // Container registry
@@ -52,13 +56,15 @@ module.exports = {
   lambdaBuildContext: process.env.TRANSFLOW_BUILD_CONTEXT || "./lambda",
   templatesDir: process.env.TRANSFLOW_TEMPLATES_DIR || "./templates",
 
-  // Redis (required for real-time updates)
-  // Single instance shared across all branches with branch-aware channels
-  redis: {
-    provider: process.env.TRANSFLOW_REDIS_PROVIDER || "upstash",
-    restUrl: process.env.REDIS_REST_URL, // Upstash REST endpoint
-    token: process.env.REDIS_TOKEN, // Upstash REST token
-    url: process.env.REDIS_URL, // Standard Redis URL (alternative)
+  // SQS (required for real-time updates)
+  sqs: {
+    // Shared queues across all branches
+    queueName: process.env.TRANSFLOW_SQS_QUEUE || "myapp-processing.fifo",
+    progressQueueName:
+      process.env.TRANSFLOW_SQS_PROGRESS_QUEUE || "myapp-progress.fifo",
+    visibilityTimeoutSec: 960,
+    maxReceiveCount: 3,
+    batchSize: 10,
   },
 
   // DynamoDB (optional job persistence)

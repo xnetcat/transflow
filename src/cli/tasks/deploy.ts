@@ -7,6 +7,9 @@ import {
   UpdateFunctionConfigurationCommand,
   GetFunctionCommand,
   AddPermissionCommand,
+  PutFunctionConcurrencyCommand,
+  CreateEventSourceMappingCommand,
+  ListEventSourceMappingsCommand,
 } from "@aws-sdk/client-lambda";
 import {
   ECRClient,
@@ -22,6 +25,13 @@ import {
   type LambdaFunctionConfiguration,
   type NotificationConfiguration,
 } from "@aws-sdk/client-s3";
+import {
+  SQSClient,
+  CreateQueueCommand,
+  GetQueueAttributesCommand,
+  SetQueueAttributesCommand,
+} from "@aws-sdk/client-sqs";
+// No IAM client required here; Lambda AddPermission is used for S3 invoke
 import type { TransflowConfig } from "../../core/types";
 
 interface DeployArgs {
@@ -47,6 +57,7 @@ export async function deploy(args: DeployArgs) {
   const ecr = new ECRClient({ region });
   const lambda = new LambdaClient({ region });
   const s3 = new S3Client({ region });
+  const sqs = new SQSClient({ region });
 
   // Ensure ECR repo
   try {
@@ -93,7 +104,68 @@ export async function deploy(args: DeployArgs) {
     )
     .then(() => execa("docker", ["push", imgUri], { stdio: "inherit" }));
 
-  // Create or update Lambda
+  // Setup SQS queues - shared for all branches (no per-branch suffix by default)
+  let queueUrl: string | undefined;
+  let progressQueueUrl: string | undefined;
+  let dlqUrl: string | undefined;
+
+  // SQS is now required - use shared names if provided
+  const queueName = cfg.sqs.queueName || `${cfg.project}-processing.fifo`;
+  // Progress queue removed (DynamoDB is the status store)
+  const dlqName = `${cfg.project}-dlq.fifo`;
+
+  // Create DLQ first
+  try {
+    const dlqResult = await sqs.send(
+      new CreateQueueCommand({
+        QueueName: dlqName,
+        Attributes: {
+          FifoQueue: "true",
+          ContentBasedDeduplication: "true",
+          MessageRetentionPeriod: "1209600", // 14 days
+        },
+      })
+    );
+    dlqUrl = dlqResult.QueueUrl;
+  } catch (error: any) {
+    if (error.name !== "QueueAlreadyExists") throw error;
+    // Get existing DLQ URL
+    const attrs = await sqs.send(
+      new GetQueueAttributesCommand({
+        QueueUrl: `https://sqs.${region}.amazonaws.com/${accountId}/${dlqName}`,
+        AttributeNames: ["QueueArn"],
+      })
+    );
+    dlqUrl = `https://sqs.${region}.amazonaws.com/${accountId}/${dlqName}`;
+  }
+
+  // Create main queue with DLQ
+  try {
+    const queueResult = await sqs.send(
+      new CreateQueueCommand({
+        QueueName: queueName,
+        Attributes: {
+          FifoQueue: "true",
+          ContentBasedDeduplication: "true",
+          VisibilityTimeout: cfg.sqs.visibilityTimeoutSec?.toString() || "960",
+          RedrivePolicy: JSON.stringify({
+            deadLetterTargetArn: `arn:aws:sqs:${region}:${accountId}:${dlqName}`,
+            maxReceiveCount: cfg.sqs.maxReceiveCount || 3,
+          }),
+        },
+      })
+    );
+    queueUrl = queueResult.QueueUrl;
+  } catch (error: any) {
+    if (error.name !== "QueueAlreadyExists") throw error;
+    // Get existing queue URL
+    queueUrl = `https://sqs.${region}.amazonaws.com/${accountId}/${queueName}`;
+  }
+
+  // No progress queue anymore (DDB is the source of truth)
+  progressQueueUrl = undefined;
+
+  // Create or update main processing Lambda
   const functionName = `${cfg.lambdaPrefix}${branch}`;
   const imageConfig = { ImageUri: imgUri };
   let exists = true;
@@ -103,21 +175,18 @@ export async function deploy(args: DeployArgs) {
     exists = false;
   }
 
-  // Use shared Redis configuration across all branches
-  const redisUrl = cfg.redis.url ?? "";
-  const redisRestUrl = cfg.redis.restUrl ?? "";
-  const redisToken = cfg.redis.token ?? "";
-
   if (!exists) {
     const branchBucket = `${cfg.project}-${branch}`;
     const envVars: Record<string, string> = {
       TRANSFLOW_BRANCH: branch,
       AWS_REGION: region,
-      // Shared Redis instance for all branches
-      REDIS_URL: redisUrl,
-      REDIS_REST_URL: redisRestUrl,
-      REDIS_REST_TOKEN: redisToken,
+      MAX_BATCH_SIZE: cfg.lambda.maxBatchSize?.toString() || "10",
     };
+
+    if (queueUrl) {
+      envVars["SQS_QUEUE_URL"] = queueUrl;
+    }
+    // No progress queue env
     if (cfg.s3.mode === "prefix") {
       if (cfg.s3.uploadBucket) envVars["UPLOAD_BUCKET"] = cfg.s3.uploadBucket;
       if (cfg.s3.outputBucket) envVars["OUTPUT_BUCKET"] = cfg.s3.outputBucket;
@@ -125,8 +194,8 @@ export async function deploy(args: DeployArgs) {
       envVars["UPLOAD_BUCKET"] = branchBucket;
       envVars["OUTPUT_BUCKET"] = branchBucket;
     }
-    if (cfg.dynamoDb?.enabled && cfg.dynamoDb.tableName)
-      envVars["DYNAMODB_TABLE"] = cfg.dynamoDb.tableName;
+    envVars["DYNAMODB_TABLE"] = cfg.dynamoDb.tableName;
+    envVars["TRANSFLOW_PROJECT"] = cfg.project;
     await lambda.send(
       new CreateFunctionCommand({
         FunctionName: functionName,
@@ -152,11 +221,14 @@ export async function deploy(args: DeployArgs) {
     const envVars: Record<string, string> = {
       TRANSFLOW_BRANCH: branch,
       AWS_REGION: region,
-      // Shared Redis instance for all branches
-      REDIS_URL: redisUrl,
-      REDIS_REST_URL: redisRestUrl,
-      REDIS_REST_TOKEN: redisToken,
+      MAX_BATCH_SIZE: cfg.lambda.maxBatchSize?.toString() || "10",
     };
+
+    if (queueUrl) {
+      envVars["SQS_QUEUE_URL"] = queueUrl;
+    }
+    // No progress queue env
+
     if (cfg.s3.mode === "prefix") {
       if (cfg.s3.uploadBucket) envVars["UPLOAD_BUCKET"] = cfg.s3.uploadBucket;
       if (cfg.s3.outputBucket) envVars["OUTPUT_BUCKET"] = cfg.s3.outputBucket;
@@ -164,8 +236,8 @@ export async function deploy(args: DeployArgs) {
       envVars["UPLOAD_BUCKET"] = branchBucket;
       envVars["OUTPUT_BUCKET"] = branchBucket;
     }
-    if (cfg.dynamoDb?.enabled && cfg.dynamoDb.tableName)
-      envVars["DYNAMODB_TABLE"] = cfg.dynamoDb.tableName;
+    envVars["DYNAMODB_TABLE"] = cfg.dynamoDb.tableName;
+    envVars["TRANSFLOW_PROJECT"] = cfg.project;
     await lambda.send(
       new UpdateFunctionConfigurationCommand({
         FunctionName: functionName,
@@ -176,20 +248,94 @@ export async function deploy(args: DeployArgs) {
     );
   }
 
-  // S3 setup
-  if (cfg.s3.mode === "bucket") {
-    const bucket = `${cfg.project}-${branch}`;
+  // Set reserved concurrency if specified
+  if (cfg.lambda.reservedConcurrency) {
     try {
-      await s3.send(new HeadBucketCommand({ Bucket: bucket }));
-    } catch {
-      const params: any = { Bucket: bucket };
-      if (region !== "us-east-1") {
-        params.CreateBucketConfiguration = { LocationConstraint: region };
-      }
-      await s3.send(new CreateBucketCommand(params));
+      await lambda.send(
+        new PutFunctionConcurrencyCommand({
+          FunctionName: functionName,
+          ReservedConcurrentExecutions: cfg.lambda.reservedConcurrency,
+        })
+      );
+    } catch (error) {
+      console.warn(`Failed to set reserved concurrency: ${error}`);
     }
   }
-  if (cfg.s3.mode === "prefix") {
+
+  // Create SQS event source mapping - SQS is now required
+  if (queueUrl) {
+    const queueArn = `arn:aws:sqs:${region}:${accountId}:${queueName}`;
+
+    // Check if event source mapping already exists
+    const existingMappings = await lambda.send(
+      new ListEventSourceMappingsCommand({
+        FunctionName: functionName,
+        EventSourceArn: queueArn,
+      })
+    );
+
+    if (existingMappings.EventSourceMappings?.length === 0) {
+      await lambda.send(
+        new CreateEventSourceMappingCommand({
+          FunctionName: functionName,
+          EventSourceArn: queueArn,
+          BatchSize: cfg.sqs.batchSize || 10,
+          MaximumBatchingWindowInSeconds: 5, // Reduce latency
+        })
+      );
+    }
+  }
+
+  // Remove separate bridge Lambda; main Lambda handles S3 events by enqueuing into SQS
+
+  // S3 setup: Create only explicitly listed buckets and NEVER delete
+  // Ensure DynamoDB table exists
+  try {
+    await execa(
+      "aws",
+      [
+        "dynamodb",
+        "describe-table",
+        "--table-name",
+        cfg.dynamoDb.tableName,
+        "--region",
+        region,
+      ],
+      { stdio: "ignore" }
+    );
+  } catch {
+    await execa(
+      "aws",
+      [
+        "dynamodb",
+        "create-table",
+        "--table-name",
+        cfg.dynamoDb.tableName,
+        "--attribute-definitions",
+        "AttributeName=assembly_id,AttributeType=S",
+        "--key-schema",
+        "AttributeName=assembly_id,KeyType=HASH",
+        "--billing-mode",
+        "PAY_PER_REQUEST",
+        "--region",
+        region,
+      ],
+      { stdio: "inherit" }
+    );
+  }
+  if (Array.isArray(cfg.s3.buckets) && cfg.s3.buckets.length > 0) {
+    for (const bucket of cfg.s3.buckets) {
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+      } catch {
+        const params: any = { Bucket: bucket };
+        if (region !== "us-east-1")
+          params.CreateBucketConfiguration = { LocationConstraint: region };
+        await s3.send(new CreateBucketCommand(params));
+      }
+    }
+  } else if (cfg.s3.mode === "prefix") {
+    // Back-compat: ensure upload/output buckets if provided
     if (cfg.s3.uploadBucket) {
       try {
         await s3.send(new HeadBucketCommand({ Bucket: cfg.s3.uploadBucket }));
@@ -211,16 +357,20 @@ export async function deploy(args: DeployArgs) {
       }
     }
   }
-  // Add PutBucketNotificationConfiguration scoped to branch prefix
+  // Add PutBucketNotificationConfiguration scoped to uploads/ prefix (shared)
   if (cfg.s3.mode === "prefix" && cfg.s3.uploadBucket) {
     const bucket = cfg.s3.uploadBucket;
-    const prefix = `uploads/${branch}/`;
+    const prefix = `uploads/`;
     const current = await s3.send(
       new GetBucketNotificationConfigurationCommand({ Bucket: bucket })
     );
     const lambdaConfigs: LambdaFunctionConfiguration[] =
       current.LambdaFunctionConfigurations ?? [];
-    const functionArn = `arn:aws:lambda:${region}:${accountId}:function:${functionName}`;
+
+    // Use main function; it will enqueue into SQS
+    const targetFunctionName = functionName;
+    const functionArn = `arn:aws:lambda:${region}:${accountId}:function:${targetFunctionName}`;
+
     const existing = lambdaConfigs.find(
       (c) =>
         c.LambdaFunctionArn === functionArn &&
@@ -247,7 +397,7 @@ export async function deploy(args: DeployArgs) {
       try {
         await lambda.send(
           new AddPermissionCommand({
-            FunctionName: functionName,
+            FunctionName: targetFunctionName,
             Action: "lambda:InvokeFunction",
             Principal: "s3.amazonaws.com",
             StatementId: `s3-invoke-${branch}`,
@@ -258,6 +408,7 @@ export async function deploy(args: DeployArgs) {
     }
   }
   if (cfg.s3.mode === "bucket") {
+    // Legacy: bucket-per-branch. If present, set uploads/ notifications.
     const bucket = `${cfg.project}-${branch}`;
     const prefix = `uploads/`;
     const current = await s3.send(
@@ -265,7 +416,10 @@ export async function deploy(args: DeployArgs) {
     );
     const lambdaConfigs: LambdaFunctionConfiguration[] =
       current.LambdaFunctionConfigurations ?? [];
-    const functionArn = `arn:aws:lambda:${region}:${accountId}:function:${functionName}`;
+
+    const targetFunctionName = functionName;
+    const functionArn = `arn:aws:lambda:${region}:${accountId}:function:${targetFunctionName}`;
+
     const existing = lambdaConfigs.find(
       (c) =>
         c.LambdaFunctionArn === functionArn &&
@@ -291,7 +445,7 @@ export async function deploy(args: DeployArgs) {
       try {
         await lambda.send(
           new AddPermissionCommand({
-            FunctionName: functionName,
+            FunctionName: targetFunctionName,
             Action: "lambda:InvokeFunction",
             Principal: "s3.amazonaws.com",
             StatementId: `s3-invoke-${branch}`,
@@ -302,5 +456,74 @@ export async function deploy(args: DeployArgs) {
     }
   }
 
-  return { imageUri: imgUri, functionName };
+  // Deploy status Lambda if enabled
+  if (cfg.statusLambda?.enabled) {
+    const statusFunctionName =
+      cfg.statusLambda.functionName || `${cfg.project}-status`;
+
+    console.log(`🚀 Deploying status Lambda: ${statusFunctionName}`);
+
+    let statusExists = true;
+    try {
+      await lambda.send(
+        new GetFunctionCommand({ FunctionName: statusFunctionName })
+      );
+    } catch {
+      statusExists = false;
+    }
+
+    const statusEnvVars: Record<string, string> = {
+      DYNAMODB_TABLE: cfg.dynamoDb.tableName,
+      TRANSFLOW_PROJECT: cfg.project,
+    };
+
+    if (!statusExists) {
+      // Create status Lambda function
+      await lambda.send(
+        new CreateFunctionCommand({
+          FunctionName: statusFunctionName,
+          Code: imageConfig,
+          Role: cfg.statusLambda.roleArn || cfg.lambda.roleArn!,
+          MemorySize: cfg.statusLambda.memoryMb || 512,
+          Timeout: cfg.statusLambda.timeoutSec || 30,
+          Architectures: cfg.lambda.architecture
+            ? [cfg.lambda.architecture]
+            : undefined,
+          Environment: { Variables: statusEnvVars },
+          Description: `Transflow status checker for ${cfg.project}`,
+          Tags: {
+            Project: cfg.project,
+            Component: "status-lambda",
+          },
+        })
+      );
+      console.log(`✅ Created status Lambda: ${statusFunctionName}`);
+    } else {
+      // Update existing status Lambda
+      await lambda.send(
+        new UpdateFunctionCodeCommand({
+          FunctionName: statusFunctionName,
+          ImageUri: imgUri,
+        })
+      );
+
+      await lambda.send(
+        new UpdateFunctionConfigurationCommand({
+          FunctionName: statusFunctionName,
+          MemorySize: cfg.statusLambda.memoryMb || 512,
+          Timeout: cfg.statusLambda.timeoutSec || 30,
+          Environment: { Variables: statusEnvVars },
+        })
+      );
+      console.log(`✅ Updated status Lambda: ${statusFunctionName}`);
+    }
+  }
+
+  return {
+    imageUri: imgUri,
+    functionName,
+    statusFunctionName: cfg.statusLambda?.enabled
+      ? cfg.statusLambda.functionName || `${cfg.project}-status`
+      : undefined,
+  };
 }

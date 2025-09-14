@@ -9,7 +9,7 @@ Transform audio, video, and images with zero-config TypeScript templates deploye
 - 🎬 **Custom Processing** - Write TypeScript templates using ffmpeg/ffprobe
 - ⚡ **Serverless** - AWS Lambda containers with Node.js 20 + ffmpeg + libvips
 - 🌿 **Branch Isolation** - Per-branch deployments with S3 prefix or bucket modes
-- 📡 **Real-time Updates** - Live progress via Server-Sent Events
+- 📡 **Real-time Updates** - Live progress via Server-Sent Events (SQS)
 - 🚀 **Zero Config CI/CD** - GitHub Actions with OIDC
 - 🔒 **Type Safe** - Full TypeScript support throughout
 
@@ -30,6 +30,8 @@ module.exports = {
   project: "myapp",
   region: "us-east-1",
   s3: {
+    // Explicit buckets we want ensured (never deleted)
+    buckets: ["myapp-uploads", "myapp-outputs"],
     mode: "prefix",
     uploadBucket: "myapp-uploads",
     outputBucket: "myapp-outputs",
@@ -38,12 +40,13 @@ module.exports = {
   lambdaPrefix: "transflow-worker-",
   templatesDir: "./templates",
   lambdaBuildContext: "./lambda",
-  // Redis (required for real-time updates)
-  // Single instance shared across all branches with branch-aware channels
-  redis: {
-    provider: "upstash",
-    restUrl: process.env.REDIS_REST_URL,
-    token: process.env.REDIS_TOKEN,
+  // SQS (required for real-time updates)
+  sqs: {
+    queueName: "myapp-processing.fifo",
+    progressQueueName: "myapp-progress.fifo",
+    visibilityTimeoutSec: 960,
+    maxReceiveCount: 3,
+    batchSize: 10,
   },
 
   // DynamoDB (optional job persistence)

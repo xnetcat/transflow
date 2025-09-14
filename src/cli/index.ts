@@ -34,7 +34,7 @@ void yargs(hideBin(process.argv))
         })
         .demandOption([], ""),
     async (argv) => {
-      const cfg = loadConfig(argv.config as string | undefined);
+      const cfg = await loadConfig(argv.config as string | undefined);
       const templatesDir = argv.templates
         ? String(argv.templates)
         : cfg.templatesDir;
@@ -59,7 +59,7 @@ void yargs(hideBin(process.argv))
         .option("yes", { type: "boolean", default: false })
         .option("config", { type: "string" }),
     async (argv) => {
-      const cfg = loadConfig(argv.config as string | undefined);
+      const cfg = await loadConfig(argv.config as string | undefined);
       const safeBranch = sanitizeBranch(String(argv.branch));
       const sha = String(argv.sha);
       const tag = (argv.tag as string | undefined) ?? `${safeBranch}-${sha}`;
@@ -90,7 +90,7 @@ void yargs(hideBin(process.argv))
         .option("delete-ecr-images", { type: "boolean", default: false })
         .option("config", { type: "string" }),
     async (argv) => {
-      const cfg = loadConfig(argv.config as string | undefined);
+      const cfg = await loadConfig(argv.config as string | undefined);
       const safeBranch = sanitizeBranch(String(argv.branch));
       const { cleanup } = await import("./tasks/cleanup.js");
       await cleanup({
@@ -119,7 +119,7 @@ void yargs(hideBin(process.argv))
           describe: "Output directory for results",
         }),
     async (argv) => {
-      const cfg = loadConfig(argv.config as string | undefined);
+      const cfg = await loadConfig(argv.config as string | undefined);
       const { localRun } = await import("./tasks/localRun.js");
       await localRun({
         cfg,
