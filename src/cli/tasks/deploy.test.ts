@@ -9,17 +9,15 @@ vi.mock("@aws-sdk/client-ecr", () => ({
 }));
 
 vi.mock("@aws-sdk/client-lambda", () => ({
-  LambdaClient: vi
-    .fn()
-    .mockImplementation(() => ({ 
-      send: vi.fn(async (command) => {
-        // Mock Lambda function exists check to return "not found" initially
-        if (command.constructor.name === "GetFunctionCommand") {
-          throw new Error("Function not found");
-        }
-        return {};
-      })
-    })),
+  LambdaClient: vi.fn().mockImplementation(() => ({
+    send: vi.fn(async (command) => {
+      // Mock Lambda function exists check to return "not found" initially
+      if (command.constructor.name === "GetFunctionCommand") {
+        throw new Error("Function not found");
+      }
+      return {};
+    }),
+  })),
   CreateFunctionCommand: class {},
   UpdateFunctionCodeCommand: class {},
   UpdateFunctionConfigurationCommand: class {},
@@ -41,23 +39,24 @@ vi.mock("@aws-sdk/client-s3", () => ({
 }));
 
 vi.mock("@aws-sdk/client-sqs", () => ({
-  SQSClient: vi
-    .fn()
-    .mockImplementation(() => ({ 
-      send: vi.fn(async (command) => {
-        // Mock different responses for different commands
-        if (command.constructor.name === "CreateQueueCommand") {
-          return { QueueUrl: "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue.fifo" };
-        }
-        if (command.constructor.name === "GetQueueAttributesCommand") {
-          return { Attributes: {} };
-        }
-        if (command.constructor.name === "SetQueueAttributesCommand") {
-          return {};
-        }
+  SQSClient: vi.fn().mockImplementation(() => ({
+    send: vi.fn(async (command) => {
+      // Mock different responses for different commands
+      if (command.constructor.name === "CreateQueueCommand") {
+        return {
+          QueueUrl:
+            "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue.fifo",
+        };
+      }
+      if (command.constructor.name === "GetQueueAttributesCommand") {
+        return { Attributes: {} };
+      }
+      if (command.constructor.name === "SetQueueAttributesCommand") {
         return {};
-      })
-    })),
+      }
+      return {};
+    }),
+  })),
   CreateQueueCommand: class {},
   GetQueueAttributesCommand: class {},
   SetQueueAttributesCommand: class {},

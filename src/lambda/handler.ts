@@ -59,6 +59,26 @@ import type {
 } from "../core/types";
 import { generateUserOutputPath } from "../web/auth";
 
+function loadTemplatesIndex(): any {
+  const candidates = [
+    process.env.TEMPLATES_INDEX_PATH,
+    "/var/task/templates.index.cjs",
+    // Fallbacks for local/dev environments
+    path.resolve(__dirname, "../../templates.index.cjs"),
+    path.resolve(process.cwd(), "templates.index.cjs"),
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      return require(candidate);
+    } catch (_) {
+      // try next candidate
+    }
+  }
+  throw new Error("Templates index not found");
+}
+
 function getSQS() {
   const region =
     process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
@@ -300,9 +320,8 @@ async function processJob(
   const { uploadId, templateId, objects, branch, fields, user } = job;
 
   try {
-    // Load baked template
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const index = require(path.join(process.cwd(), "templates.index.cjs"));
+    // Load baked template (path-agnostic: env → /var/task → fallbacks)
+    const index = loadTemplatesIndex();
     const mod = index[templateId];
     if (!mod || !mod.default)
       throw new Error(`Template not found: ${templateId}`);
@@ -524,7 +543,7 @@ async function processJob(
       );
       // Webhook notify with retries and optional HMAC
       try {
-        const index = require(path.join(process.cwd(), "templates.index.cjs"));
+        const index = loadTemplatesIndex();
         const mod = index[templateId];
         const tpl2: TemplateDefinition | undefined = mod?.default;
         if (tpl2?.webhookUrl) {
@@ -571,7 +590,7 @@ async function processJob(
 
       // Send webhook notification for errors too
       try {
-        const index = require(path.join(process.cwd(), "templates.index.cjs"));
+        const index = loadTemplatesIndex();
         const mod = index[templateId];
         const tpl2: TemplateDefinition | undefined = mod?.default;
         if (tpl2?.webhookUrl) {

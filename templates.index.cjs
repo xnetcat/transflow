@@ -1,4 +1,5 @@
-// Mock template file for testing
+// Test/development templates index. In production, the baked
+// templates.index.cjs inside the Lambda image will be used instead.
 module.exports = {
   "test-template": {
     default: {
@@ -7,10 +8,8 @@ module.exports = {
       webhookSecret: "test-secret",
       steps: [
         {
-          name: "test-step",
-          run: async () => {
-            return {};
-          },
+          name: "noop",
+          run: async () => {},
         },
       ],
     },

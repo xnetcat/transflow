@@ -1,144 +1,142 @@
 # Transflow Architecture
 
-This document provides a comprehensive overview of Transflow's architecture, data flow, and deployment model.
+This document provides a comprehensive overview of Transflow's modern, production-ready architecture with shared resources and DynamoDB-based status tracking.
 
 ## System Overview
 
 Transflow is a serverless media processing pipeline that provides:
 
 - Zero-config media transcoding using ffmpeg
-- Branch-isolated deployments
-- Real-time processing progress via SSE
+- Shared AWS resources with logical branch isolation
+- Real-time status tracking via DynamoDB polling
+- Deterministic job IDs for reliable status checking
 - TypeScript-based processing templates
 - Docker-containerized Lambda functions
+- Optional webhook notifications with retries and HMAC signing
 
 ## Architecture Diagram
 
 ```mermaid
 graph TB
-    %% Development Layer
-    subgraph DEV["🔧 Development Environment"]
-        DEV_CONFIG["transflow.config.js<br/>📝 Project Configuration"]
-        DEV_TEMPLATES["templates/<br/>📁 TypeScript Templates<br/>(tpl_basic_audio.ts, etc.)"]
-        DEV_NEXTJS["Next.js App<br/>🌐 Frontend Application"]
-        DEV_CLI["CLI Tool<br/>⚙️ transflow command"]
+    %% User Layer
+    subgraph USER["👤 User Layer"]
+        BROWSER["Browser<br/>🖥️ User Interface"]
+        NEXTJS["Next.js App<br/>🌐 Frontend Application"]
+        CLIENT["Client Libraries<br/>📚 React Components"]
     end
 
-    %% Build & Bake Layer
-    subgraph BAKE["🏭 Build Process"]
-        BAKE_ESBUILD["esbuild<br/>📦 Bundle Templates"]
-        BAKE_HANDLER["Lambda Handler<br/>🔌 Compiled Runtime"]
-        BAKE_DOCKER["Docker Context<br/>🐳 Build Ready"]
-        BAKE_INDEX["templates.index.cjs<br/>📋 Template Registry"]
+    %% API Layer
+    subgraph API["🔌 API Layer"]
+        API_UPLOAD["Upload API<br/>📤 /api/create-upload<br/>Pre-signed URLs + Assembly ID"]
+        API_STATUS["Status API<br/>📊 /api/status<br/>DynamoDB Polling"]
+        API_STATUS_LAMBDA["Status Lambda API<br/>⚡ Direct Lambda Invoke<br/>Optional Webhook Trigger"]
     end
 
-    %% GitHub Actions / CI
-    subgraph CI["🚀 GitHub Actions"]
-        CI_TRIGGER["Push to Branch<br/>📤 Git Push"]
-        CI_BAKE["Bake Step<br/>🏭 Template Compilation"]
-        CI_DEPLOY["Deploy Step<br/>🚀 Infrastructure Setup"]
-        CI_CLEANUP["Cleanup Workflow<br/>🧹 Branch Deletion"]
-    end
+    %% AWS Shared Infrastructure
+    subgraph AWS["☁️ AWS Infrastructure (Shared)"]
 
-    %% AWS Infrastructure Layer
-    subgraph AWS["☁️ AWS Cloud Infrastructure"]
-
-        subgraph ECR_SECTION["📦 Container Registry"]
-            ECR["Amazon ECR<br/>🐳 Docker Images<br/>transflow-worker:branch-sha"]
+        subgraph CONTAINER_SECTION["📦 Container Registry"]
+            ECR["Amazon ECR<br/>🐳 Single Repository<br/>transflow-worker"]
         end
 
-        subgraph LAMBDA_SECTION["⚡ Compute"]
-            LAMBDA["AWS Lambda<br/>🔥 Container Function<br/>transflow-worker-{branch}"]
-            LAMBDA_ENV["Environment Variables<br/>📝 TRANSFLOW_BRANCH<br/>REDIS_URL, OUTPUT_BUCKET"]
+        subgraph COMPUTE_SECTION["⚡ Compute"]
+            LAMBDA_MAIN["Main Lambda<br/>🔥 Processing Function<br/>Container-based"]
+            LAMBDA_STATUS["Status Lambda<br/>📊 User-facing Status API<br/>(Optional)"]
         end
 
         subgraph STORAGE_SECTION["💾 Storage"]
-            S3_UPLOAD["S3 Upload Bucket<br/>📤 uploads/{branch}/{uploadId}/"]
-            S3_OUTPUT["S3 Output Bucket<br/>📥 outputs/{branch}/{uploadId}/"]
-            S3_NOTIFICATION["S3 Event Notifications<br/>🔔 Object Created Events"]
+            S3_BUCKETS["S3 Buckets<br/>📤 Explicit bucket list in config<br/>Prefix-based branch isolation<br/>NEVER deleted"]
+            S3_NOTIFICATION["S3 Event Notifications<br/>🔔 Object Created → SQS"]
         end
 
         subgraph DATA_SECTION["💽 Data Layer"]
-            REDIS["Redis (Upstash)<br/>🔄 Real-time Streaming<br/>channel: upload:{branch}:{uploadId}"]
-            DDB["DynamoDB (Optional)<br/>📊 Job Persistence<br/>TransflowJobs table"]
+            SQS_QUEUE["SQS FIFO Queue<br/>🚀 Single processing queue<br/>+ Dead Letter Queue"]
+            DYNAMODB["DynamoDB Table<br/>📊 Single table for all branches<br/>assembly_id as primary key"]
         end
     end
 
-    %% Runtime / Client Layer
-    subgraph RUNTIME["🌍 Runtime / Client"]
-        BROWSER["Browser<br/>🖥️ User Interface"]
-        UPLOADER["Uploader Component<br/>📤 File Upload Widget"]
-        SSE["Server-Sent Events<br/>📡 Real-time Updates"]
-        API_UPLOAD["API: create-upload<br/>🔗 Pre-signed URLs"]
-        API_STREAM["API: stream<br/>📺 SSE Endpoint"]
-    end
-
-    %% Media Processing Flow
-    subgraph PROCESSING["🎬 Media Processing"]
-        FFMPEG["ffmpeg/ffprobe<br/>🎵 Media Tools"]
-        TEMPLATE_EXEC["Template Execution<br/>⚙️ Custom Processing Steps"]
-        PROGRESS["Progress Publishing<br/>📊 Step Updates"]
+    %% External Services
+    subgraph EXTERNAL["🌐 External Services"]
+        WEBHOOK["Webhook Endpoints<br/>🔔 Optional notifications<br/>HMAC signed"]
     end
 
     %% Development Flow
-    DEV_CONFIG --> DEV_CLI
-    DEV_TEMPLATES --> DEV_CLI
-    DEV_CLI -->|"bake"| BAKE_ESBUILD
-
-    %% Bake Process
-    BAKE_ESBUILD --> BAKE_INDEX
-    BAKE_ESBUILD --> BAKE_HANDLER
-    BAKE_INDEX --> BAKE_DOCKER
-    BAKE_HANDLER --> BAKE_DOCKER
-
-    %% CI/CD Flow
-    CI_TRIGGER --> CI_BAKE
-    CI_BAKE --> CI_DEPLOY
-    CI_DEPLOY --> ECR
-    CI_DEPLOY --> LAMBDA
-    CI_DEPLOY --> S3_UPLOAD
-    CI_DEPLOY --> S3_OUTPUT
-    CI_CLEANUP -.->|"branch delete"| LAMBDA
-    CI_CLEANUP -.->|"optional"| S3_UPLOAD
-
-    %% Deployment Flow
-    BAKE_DOCKER -->|"docker build & push"| ECR
-    ECR --> LAMBDA
-    LAMBDA --> LAMBDA_ENV
-    S3_UPLOAD --> S3_NOTIFICATION
-    S3_NOTIFICATION --> LAMBDA
-
-    %% Runtime Flow
-    BROWSER --> UPLOADER
-    UPLOADER --> API_UPLOAD
-    API_UPLOAD -->|"pre-signed URL"| S3_UPLOAD
-    S3_UPLOAD -->|"S3 Event"| LAMBDA
+    subgraph DEV["🔧 Development"]
+        CONFIG["transflow.config.js<br/>📝 Shared resource config"]
+        TEMPLATES["templates/<br/>📁 TypeScript processing logic"]
+        CLI["CLI Tool<br/>⚙️ Bake, Deploy, Status"]
+    end
 
     %% Processing Flow
-    LAMBDA --> TEMPLATE_EXEC
-    TEMPLATE_EXEC --> FFMPEG
-    TEMPLATE_EXEC --> PROGRESS
-    TEMPLATE_EXEC -->|"uploadResult()"| S3_OUTPUT
-    PROGRESS --> REDIS
+    BROWSER --> API_UPLOAD
+    API_UPLOAD -->|"Assembly ID"| BROWSER
+    API_UPLOAD -->|"Pre-signed URL + Metadata"| S3_BUCKETS
+    S3_BUCKETS -->|"S3 Event"| S3_NOTIFICATION
+    S3_NOTIFICATION --> SQS_QUEUE
+    SQS_QUEUE --> LAMBDA_MAIN
 
-    %% Real-time Updates
-    REDIS --> API_STREAM
-    API_STREAM --> SSE
-    SSE --> BROWSER
+    %% Status Flow
+    BROWSER -->|"Poll every 2-5s"| API_STATUS
+    API_STATUS --> DYNAMODB
+    DYNAMODB --> API_STATUS
+    API_STATUS --> BROWSER
 
-    %% Optional DynamoDB
-    LAMBDA -.->|"optional job tracking"| DDB
+    %% Direct Status Lambda Flow
+    CLIENT -.->|"Optional direct calls"| API_STATUS_LAMBDA
+    API_STATUS_LAMBDA --> DYNAMODB
+    API_STATUS_LAMBDA -.->|"Optional trigger"| WEBHOOK
 
-    %% Next.js Integration
-    DEV_NEXTJS --> API_UPLOAD
-    DEV_NEXTJS --> API_STREAM
-    DEV_NEXTJS --> UPLOADER
+    %% Processing Flow
+    LAMBDA_MAIN --> DYNAMODB
+    LAMBDA_MAIN -->|"Upload results"| S3_BUCKETS
+    LAMBDA_MAIN -.->|"Optional webhooks"| WEBHOOK
 
-    %% Branch Isolation
-    S3_UPLOAD -.->|"prefix mode: uploads/{branch}/"| S3_UPLOAD
-    S3_OUTPUT -.->|"prefix mode: outputs/{branch}/"| S3_OUTPUT
-    S3_UPLOAD -.->|"bucket mode: {project}-{branch}"| S3_UPLOAD
+    %% Development Flow
+    CONFIG --> CLI
+    TEMPLATES --> CLI
+    CLI -->|"Bake & Deploy"| ECR
+    ECR --> LAMBDA_MAIN
+    ECR -.-> LAMBDA_STATUS
+
+    %% Branch Isolation (Logical)
+    S3_BUCKETS -.->|"Prefix: uploads/{branch}/"| S3_BUCKETS
+    DYNAMODB -.->|"Key: assembly_id (includes branch)"| DYNAMODB
+    SQS_QUEUE -.->|"Shared queue, branch in metadata"| SQS_QUEUE
 ```
+
+## Core Principles
+
+### 1. **Shared Resources**
+
+- **Single Lambda function** serves all branches
+- **Single SQS queue** handles all processing jobs
+- **Single DynamoDB table** stores all job statuses
+- **Single ECR repository** stores container images
+- **Cost-effective** and **simplified infrastructure**
+
+### 2. **Logical Branch Isolation**
+
+- **S3 prefixes**: `uploads/{branch}/`, `outputs/{branch}/`
+- **Assembly IDs**: Include branch context in deterministic hash
+- **DynamoDB keys**: `assembly_id` contains branch information
+- **Complete data separation** without resource duplication
+
+### 3. **Deterministic Job IDs**
+
+```typescript
+// Single file
+assembly_id = sha256(md5(file) + templateId + userId);
+
+// Batch files
+assembly_id = sha256(joined_md5s + templateId + userId);
+```
+
+### 4. **Status-First Design**
+
+- **DynamoDB as single source of truth** for all job status
+- **Assembly-based tracking** with Transloadit-like rich status data
+- **No real-time streams** - simple polling every 2-5 seconds
+- **Deterministic lookups** - status always available by assembly_id
 
 ## Component Breakdown
 
@@ -146,251 +144,202 @@ graph TB
 
 **Configuration (`transflow.config.js`)**
 
-- Central configuration for AWS resources, S3 buckets, Lambda settings
-- Environment-aware settings using process.env
-- Supports both prefix and bucket isolation modes
+- Central configuration for all AWS resources
+- **Explicit S3 bucket list** - buckets are created but never deleted
+- **Shared resource definitions** - single Lambda, SQS, DynamoDB for all branches
+- **JavaScript/CJS/MJS support** for dynamic configuration
 
 **Templates (`templates/`)**
 
 - TypeScript files defining media processing pipelines
-- Each template exports a `TemplateDefinition` with steps
+- Each template exports a `TemplateDefinition` with steps and optional webhook config
 - Steps are async functions with access to `StepContext` utilities
+- **Optional webhook URL and secret** for post-processing notifications
 
 **CLI Tool**
 
 - `transflow bake` - Compiles templates via esbuild
-- `transflow deploy` - Builds and deploys infrastructure
-- `transflow cleanup` - Removes branch resources
-- `transflow local:run` - Local testing with your ffmpeg
+- `transflow deploy` - Deploys shared infrastructure to AWS
+- `transflow cleanup` - Cleans branch-specific S3 prefixes only
+- `transflow status` - Check job status by assembly ID (optional)
 
-### 🏭 Build Process (Baking)
-
-**Template Compilation**
-
-- TypeScript templates → JavaScript modules via esbuild
-- Creates `templates.index.cjs` registry mapping template IDs to modules
-- All templates bundled into Docker build context
-
-**Lambda Handler Bundling**
-
-- Runtime handler compiled separately with external dependencies
-- Optimized for cold start performance
-- Includes all AWS SDK clients and Redis
-
-**Docker Context Generation**
-
-- Creates build-ready directory with templates, handler, package.json
-- Copies Dockerfile from assets/
-- Ready for `docker build` in CI/CD
-
-### 🚀 CI/CD Pipeline
-
-**Trigger (Git Push)**
-
-- Every branch push triggers GitHub Actions workflow
-- Branch name determines Lambda function naming
-- Commit SHA used for Docker image tagging
-
-**Bake Step**
-
-- Runs `transflow bake` to compile templates
-- Validates configuration and dependencies
-- Prepares Docker build context
-
-**Deploy Step**
-
-- Builds Docker image with Node.js 20 + ffmpeg + libvips
-- Pushes to ECR with tag `{branch}-{sha}`
-- Creates/updates Lambda function per branch
-- Configures S3 notifications and IAM permissions
-
-**Cleanup Workflow**
-
-- Triggered on branch deletion
-- Removes Lambda function and S3 notifications
-- Optionally cleans up storage and ECR images
-
-### ☁️ AWS Infrastructure
+### ☁️ AWS Infrastructure (Shared)
 
 **Container Registry (ECR)**
 
-- Stores Docker images with media processing tools
+- Single repository: `{project}-worker`
 - Images tagged with branch and commit SHA
-- Supports both x86_64 and arm64 architectures
+- Shared across all branches for cost efficiency
 
 **Compute (Lambda)**
 
-- Container functions named `{prefix}-{branch}`
-- Environment variables for branch, Redis, S3 config
-- Memory (128MB-10GB) and timeout (1-900s) configurable
-- Triggered by S3 events, not direct invocation
+- **Main Processing Lambda**: Handles S3 events and SQS processing
+- **Optional Status Lambda**: Dedicated user-facing status API
+- **Shared functions** serve all branches with branch context from metadata
+- **Event source mapping** from single SQS queue to main Lambda
 
 **Storage (S3)**
 
-- **Upload Bucket**: Receives files from pre-signed URLs
-- **Output Bucket**: Stores processed results
-- **Event Notifications**: Trigger Lambda on object creation
-- **Branch Isolation**: Prefix (`uploads/{branch}/`) or bucket (`{project}-{branch}`) modes
+- **Explicit bucket management**: Listed in config, created if missing, never deleted
+- **Prefix-based isolation**: `uploads/{branch}/`, `outputs/{branch}/`
+- **User isolation** (optional): `uploads/{branch}/users/{userId}/`
+- **Event notifications**: S3 → SQS for reliable processing
 
 **Data Layer**
 
-- **SQS**: Messaging for processing (jobs) and progress (real-time updates)
-- **DynamoDB**: Optional job persistence and metadata storage
+- **SQS**: Single FIFO processing queue + DLQ for all branches
+- **DynamoDB**: Single table with `assembly_id` primary key containing all job data
+- **No Redis**: Eliminated completely in favor of DynamoDB polling
 
 ### 🌍 Runtime & Client
 
 **Browser Integration**
 
-- Uploader component handles file selection and upload
-- Server-Sent Events for real-time progress updates
-- TransflowProvider for configuration context
+- Uploader component with real-time status polling
+- Status updates via REST API calls to DynamoDB
+- Rich UI showing uploads, results, progress, and timing
+- **No EventSource/SSE** - simple fetch() polling every 2-5 seconds
 
 **API Endpoints**
 
-- `create-upload`: Generates pre-signed S3 URLs with metadata
-- `stream`: SSE endpoint backed by SQS progress queue
-- Both integrate seamlessly with Next.js API routes
-
-**File Upload Flow**
-
-1. Browser requests pre-signed URL with template ID
-2. File uploaded directly to S3 with metadata
-3. S3 event triggers Lambda function
-4. Processing progress streamed via SQS → SSE
+- `create-upload`: Generates pre-signed S3 URLs + deterministic assembly_id
+- `status`: Polls DynamoDB for current job status by assembly_id
+- `status-lambda` (optional): Direct Lambda invocation for status checking
 
 ### 🎬 Media Processing
 
-**Template Execution**
+**Job Processing Flow**
 
-- Lambda downloads input files to `/tmp`
-- Executes template steps in sequence
-- Each step has access to ffmpeg, ffprobe, and utilities
+1. **File Upload**: Direct to S3 with metadata (uploadId, templateId, assemblyId, userId)
+2. **S3 Event**: Triggers SQS message to processing queue
+3. **Lambda Processing**: Downloads files, runs template steps, uploads results
+4. **Status Updates**: Updates DynamoDB with progress, results, timing data
+5. **Webhook Notifications**: Optional POST to configured endpoints with retries
 
-**Progress Publishing**
+**Assembly Status Schema (Transloadit-like)**
 
-- Real-time updates published to SQS progress queue (with channel field)
-- Step start/completion, ffprobe output, errors
-- Channel naming: `upload:{branch}:{uploadId}` for branch isolation
-
-**Output Management**
-
-- `uploadResult()` saves files to output bucket
-- Automatic content-type detection
-- Multiple outputs per template supported
+```typescript
+{
+  assembly_id: "abc123...",
+  ok: "ASSEMBLY_COMPLETED" | undefined,
+  error: string | undefined,
+  message: string,
+  uploads: Array<{
+    id: string,
+    name: string,
+    size: number,
+    mime: string,
+    md5hash: string,
+    // ... metadata
+  }>,
+  results: {
+    [stepName]: Array<{
+      id: string,
+      name: string,
+      size: number,
+      ssl_url: string,
+      original_id: string,
+      // ... metadata
+    }>
+  },
+  bytes_expected: number,
+  bytes_received: number,
+  bytes_usage: number,
+  execution_duration: number,
+  execution_start: string,
+  created_at: string,
+  updated_at: string,
+  user: { userId: string },
+  template_id: string,
+  branch: string
+}
+```
 
 ## Data Flow
 
-### 1. Development → Deployment
+### 1. File Upload Flow
 
 ```
-Templates (TS) → esbuild → JS modules → Docker context → ECR → Lambda
+Browser → create-upload API → Pre-signed URL + assembly_id → S3 Upload (with metadata)
 ```
 
-### 2. File Processing
+### 2. Processing Flow
 
 ```
-Browser → Pre-signed URL → S3 Upload → S3 Event → Lambda → ffmpeg → S3 Output
+S3 Event → SQS Queue → Main Lambda → Template Steps → Results to S3 → DynamoDB Status Update → Optional Webhook
 ```
 
-### 3. Real-time Updates
+### 3. Status Checking Flow
 
 ```
-Lambda Progress → SQS Progress Queue → SSE Endpoint → Browser EventSource
+Browser → status API → DynamoDB → Assembly Status → UI Update
 ```
 
-## Branch Isolation
-
-Transflow uses **shared resources with branch isolation** - a single SQS (processing + progress) and DynamoDB table serve all branches while maintaining complete data separation.
-
-### S3 Storage Isolation
-
-**Prefix Mode (Default)**
-
-- Single upload and output buckets shared across branches
-- Files organized by prefix: `uploads/{branch}/{uploadId}/`
-- Lambda functions: `{prefix}-{branch}`
-- S3 notifications scoped to branch prefix
-
-**Bucket Mode**
-
-- Separate bucket per branch: `{project}-{branch}`
-- Both uploads and outputs use same bucket
-- Lambda functions: `{prefix}-{branch}`
-- Full bucket isolation for security/compliance
-
-### Redis Channel Isolation
-
-**Branch-Aware Channels**
-
-- Format: `upload:{branch}:{uploadId}`
-- Example: `upload:main:abc123`, `upload:feature-x:def456`
-- Prevents cross-branch message collision
-- Single Redis instance serves all branches
-
-**SSE Endpoint Support**
+### 4. Optional Status Lambda Flow
 
 ```
-# Listen to specific upload
-/api/stream?channel=upload:main:abc123
-
-# Listen to all uploads for a branch
-/api/stream?branch=main
+Client → Status Lambda → DynamoDB → Response (+ Optional Webhook Trigger)
 ```
 
-### DynamoDB Key Isolation
+## Branch Isolation Model
 
-**Composite Key Structure**
+### Shared Resources (Cost Effective)
 
-- Primary Key: `branch#uploadId` (e.g., `main#abc123`)
-- Sort Key: `uploadId`
-- Branch attribute for queries
-- Single table with complete branch separation
+- **1 Lambda function** processes all branches
+- **1 SQS queue** handles all jobs
+- **1 DynamoDB table** stores all statuses
+- **1 ECR repository** stores all images
 
-**Benefits**
+### Logical Isolation (Complete Data Separation)
 
-- Cost-effective: One table vs many
-- Cross-branch analytics possible
-- Consistent backup/monitoring
-- Simplified infrastructure management
+- **S3 Prefixes**: `uploads/{branch}/`, `outputs/{branch}/`
+- **Assembly IDs**: Deterministic hash includes branch context
+- **DynamoDB Keys**: `assembly_id` provides branch isolation
+- **Metadata**: Branch information in S3 object metadata
 
-## Scaling & Performance
+### Security Benefits
 
-**Cold Start Optimization**
+- **No cross-branch access**: Users only see their assemblies
+- **Path-based isolation**: S3 bucket policies enforce user directories
+- **Deterministic job IDs**: Consistent status lookups
+- **Authentication required**: JWT validation for all operations
 
-- Templates baked into image (zero config fetching)
-- Optimized Docker layers for faster pulls
-- External dependencies cached in Lambda environment
+## Key Advantages
 
-**Concurrency**
+### 1. **Simplified Architecture**
 
-- Each upload gets unique Lambda invocation
-- S3 events provide natural load distribution
-- Redis pub/sub scales horizontally
+- **No Redis management** - eliminated completely
+- **No SSE complexity** - simple REST polling
+- **Single DynamoDB table** - one source of truth
+- **Fewer moving parts** - easier to debug and monitor
 
-**Resource Management**
+### 2. **Cost Optimization**
 
-- Configurable memory (affects CPU allocation)
-- Timeout prevents runaway processes
-- Automatic cleanup of `/tmp` files
+- **Shared infrastructure** across all branches
+- **No per-branch resources** - eliminates waste
+- **Pay-per-use DynamoDB** - only pay for active jobs
+- **Efficient polling** - 2-5 second intervals vs real-time streams
 
-## Security Model
+### 3. **Production Reliability**
 
-**IAM Roles**
+- **Deterministic job tracking** - assembly_id always works
+- **Rich status data** - complete job information in single response
+- **Webhook resilience** - retries with exponential backoff
+- **Authentication built-in** - JWT validation and ownership checks
 
-- Deploy role: ECR, Lambda, S3, IAM pass-role permissions
-- Execution role: S3 get/put, CloudWatch logs, optional DynamoDB
-- Principle of least privilege with resource-specific policies
+### 4. **Developer Experience**
 
-**Data Isolation**
+- **Simple status polling** - easy to implement in any frontend
+- **Rich debugging data** - detailed execution information
+- **Optional direct Lambda calls** - bypasses web layer if needed
+- **Comprehensive error handling** - clear error messages and codes
 
-- Branch-scoped S3 prefixes/buckets
-- Lambda environment variables per branch
-- Redis channels namespaced by upload ID
+## Performance Characteristics
 
-**Network Security**
+**Cold Start**: ~1-2s for main Lambda, ~500ms for status Lambda  
+**Warm Execution**: ~100-500ms processing, ~10-50ms status lookups  
+**Polling Overhead**: Minimal with 2-5s intervals  
+**Concurrent Users**: Scales automatically with Lambda concurrency  
+**Data Consistency**: Strong consistency with DynamoDB
 
-- VPC deployment optional
-- S3 pre-signed URLs with expiration
-- Redis over TLS (Upstash default)
-
-This architecture enables scalable, branch-isolated media processing with real-time feedback, perfect for Next.js applications requiring robust media handling capabilities.
+This architecture provides a robust, cost-effective, and maintainable foundation for serverless media processing at any scale.

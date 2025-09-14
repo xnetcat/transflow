@@ -303,58 +303,52 @@ module.exports = {
 };
 ```
 
-## Redis/SSE Issues
+## Status Tracking Issues
 
-### No real-time updates received
+### No status updates received
 
-**Error**: Browser EventSource receives no messages.
+**Error**: Status polling returns 404 or empty responses.
 
-**Cause**: Redis connection issues or SSE endpoint not working.
+**Cause**: DynamoDB not configured or assembly_id incorrect.
 
 **Solution**:
 
 ```bash
-# Test Redis connectivity
-curl -X GET "https://your-db.upstash.io/ping" \
-  -H "Authorization: Bearer your-token"
+# Test DynamoDB connectivity
+aws dynamodb describe-table --table-name TransflowJobs --region us-east-1
 
-# Check SSE endpoint directly
-curl -N "http://localhost:3000/api/transflow/stream?channel=upload:test-id"
+# Check status API endpoint directly
+curl "http://localhost:3000/api/transflow/status?assemblyId=test-assembly-123"
 
 # Verify environment variables in Lambda
 aws lambda get-function-configuration --function-name transflow-worker-main \
   --query 'Environment.Variables'
 ```
 
-Check Next.js API route (SQS-based SSE):
+Check Next.js API route:
 
 ```ts
-// pages/api/transflow/stream.ts
-import type { NextApiRequest, NextApiResponse } from "next";
-import { createStreamHandler } from "@xnetcat/transflow/web/createStreamHandler";
-import config from "../../../transflow.config"; // JS config
+// pages/api/transflow/status.ts
+import { createStatusHandler } from "@xnetcat/transflow";
+import config from "../../../transflow.config";
 
-const handler = createStreamHandler(config);
-
-export default function api(req: NextApiRequest, res: NextApiResponse) {
-  return handler(req as any, res as any);
-}
+export default createStatusHandler(config);
 ```
 
-### No progress updates
+### Assembly not found errors
 
-**Error**: No SSE messages arriving at client.
+**Error**: 404 responses when checking status.
 
 **Causes & Fixes**:
 
-- SQS progress queue URL is missing
-  - Ensure `SQS_PROGRESS_QUEUE_URL` is set on Lambda and stream server
-  - Ensure the queue exists and is in the right region
-- Stream handler not filtering by correct channel
-  - Verify channel format: `upload:{branch}:{uploadId}`
-  - Ensure the SSE endpoint is called with `?uploadId={id}` and correct branch
-- IAM permissions missing for SQS
-  - Attach policy allowing `ReceiveMessage`, `DeleteMessage` on progress queue
+- Assembly ID mismatch between upload and status check
+  - Ensure `fileHash` or `md5hash` is provided during upload
+  - Verify same templateId and userId are used
+- DynamoDB table doesn't exist
+  - Check table name in configuration matches deployed table
+  - Verify region matches between Lambda and DynamoDB
+- Lambda lacks DynamoDB permissions
+  - Attach policy allowing `PutItem`, `GetItem`, `UpdateItem` on status table
 
 ## Template Issues
 
@@ -461,20 +455,29 @@ ffmpeg -version
 ffprobe -version
 ```
 
-### Local Redis required
+### Local DynamoDB testing
 
-**Error**: Connection failed when testing locally.
+**Error**: DynamoDB connection failed when testing locally.
 
-**Cause**: Local development requires Redis instance.
+**Cause**: Local development requires DynamoDB configuration.
 
 **Solution**:
 
 ```bash
-# Use Docker for local Redis
-docker run -d -p 6379:6379 redis:alpine
+# Use DynamoDB Local for testing
+docker run -d -p 8000:8000 amazon/dynamodb-local
 
-# Or use Upstash directly (no local Redis needed)
-export REDIS_URL="rediss://default:password@host:port"
+# Or use AWS DynamoDB directly (recommended)
+export DYNAMODB_TABLE="TransflowJobs"
+export AWS_REGION="us-east-1"
+
+# Create table for testing
+aws dynamodb create-table \
+  --table-name TransflowJobs \
+  --attribute-definitions AttributeName=assembly_id,AttributeType=S \
+  --key-schema AttributeName=assembly_id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-east-1
 ```
 
 ## GitHub Actions Issues
@@ -633,11 +636,12 @@ async function debugStep(ctx: StepContext) {
   console.log("Input file size:", fs.statSync(ctx.inputLocalPath).size);
   console.log("Temp dir contents:", fs.readdirSync(ctx.tmpDir));
 
-  // Add debug output to Redis stream
-  await ctx.utils.publish({
-    type: "debug",
-    message: "Step started",
-    context: { uploadId: ctx.uploadId, branch: ctx.branch },
+  // Debug logs are automatically captured in CloudWatch
+  console.log("Debug info:", {
+    uploadId: ctx.uploadId,
+    branch: ctx.branch,
+    template: ctx.input.key,
+    step: "debug-step",
   });
 }
 ```

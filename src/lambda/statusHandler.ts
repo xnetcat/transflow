@@ -130,10 +130,22 @@ export const handler = async (
     // Trigger webhook if requested and configured
     if (event.triggerWebhook && assembly.template_id) {
       try {
-        // Load template to get webhook configuration
-        const templatesPath =
-          process.env.TEMPLATES_INDEX_PATH || "/var/task/templates.index.cjs";
-        const index = require(templatesPath);
+        // Load template to get webhook configuration (path-agnostic)
+        const candidates = [
+          process.env.TEMPLATES_INDEX_PATH,
+          "/var/task/templates.index.cjs",
+          require("path").resolve(__dirname, "../../templates.index.cjs"),
+          require("path").resolve(process.cwd(), "templates.index.cjs"),
+        ].filter(Boolean) as string[];
+        let index: any | undefined;
+        for (const candidate of candidates) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            index = require(candidate);
+            break;
+          } catch {}
+        }
+        if (!index) throw new Error("Templates index not found");
         const mod = index[assembly.template_id];
         const template: TemplateDefinition | undefined = mod?.default;
 

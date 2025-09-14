@@ -117,12 +117,8 @@ await ctx.utils.uploadResults?.([
 #### Progress & Communication
 
 ```ts
-// Publish custom progress message
-await ctx.utils.publish({
-  type: "progress",
-  message: "Starting video analysis...",
-  percent: 25,
-});
+// Note: ctx.utils.publish() is deprecated (SSE removed)
+// Status updates are automatically handled via DynamoDB
 
 // Generate output key with prefix
 const outputKey = ctx.utils.generateKey("thumbnail.jpg");
@@ -146,7 +142,7 @@ async function runProbe(ctx: StepContext) {
     "-",
   ]);
   if (code !== 0) throw new Error("ffprobe failed");
-  await ctx.utils.publish({ type: "ffprobe", stdout });
+  console.log("ffprobe output:", stdout);
 }
 
 async function makePreview(ctx: StepContext) {
@@ -338,8 +334,7 @@ async function robustStep(ctx: StepContext) {
     }
   } catch (error) {
     // Log additional context before re-throwing
-    await ctx.utils.publish({
-      type: "error",
+    console.error("Step failed:", {
       step: "robustStep",
       message: error.message,
       input: ctx.input.key,
@@ -349,39 +344,24 @@ async function robustStep(ctx: StepContext) {
 }
 ```
 
-### Progress Reporting
+### Status Updates
 
 ```ts
-async function longRunningStep(ctx: StepContext) {
-  await ctx.utils.publish({
-    type: "progress",
-    message: "Starting analysis...",
-    percent: 0,
-  });
+// Status updates are automatically handled by the Lambda runtime
+// Jobs are tracked in DynamoDB with rich metadata including:
+// - uploads[] array with file details
+// - results{} object with step outputs
+// - execution timing and bytes tracking
+// - error details if processing fails
 
-  // Step 1
+async function processWithLogging(ctx: StepContext) {
+  console.log("Starting processing step...");
+
+  // Do actual work
   await someOperation();
-  await ctx.utils.publish({
-    type: "progress",
-    message: "Analysis complete",
-    percent: 33,
-  });
 
-  // Step 2
-  await anotherOperation();
-  await ctx.utils.publish({
-    type: "progress",
-    message: "Processing video...",
-    percent: 66,
-  });
-
-  // Step 3
-  await finalOperation();
-  await ctx.utils.publish({
-    type: "progress",
-    message: "Upload complete",
-    percent: 100,
-  });
+  console.log("Step completed successfully");
+  // Status automatically updated in DynamoDB when step completes
 }
 ```
 
@@ -436,7 +416,7 @@ Templates run in a Lambda container with:
 - **ffmpeg/ffprobe** - Static builds with full codec support
 - **libvips** - Image processing library (for sharp)
 - **AWS SDK v3** - S3, DynamoDB clients pre-installed
-- **ioredis** - Redis client for progress publishing
+- **Full filesystem access** - /tmp directory for intermediate files
 
 ## Template Organization
 
