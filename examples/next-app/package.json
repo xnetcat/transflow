@@ -6,8 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "bake": "transflow bake --config transflow.config.json",
-    "deploy": "transflow deploy --branch local --sha dev --config transflow.config.json --yes"
+    "bake": "transflow bake --config transflow.config.js",
+    "deploy": "transflow deploy --branch local --sha dev --config transflow.config.js --yes"
   },
   "dependencies": {
     "next": "14.2.5",

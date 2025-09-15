@@ -5,9 +5,9 @@ import {
   type ApiResponse,
   type TransflowConfig,
 } from "@xnetcat/transflow";
-import cfg from "../../transflow.config.json";
+import transflowConfig from "../../transflow.config.js";
 
-const uploadHandler = createUploadHandler(cfg as TransflowConfig);
+const uploadHandler = createUploadHandler(transflowConfig as TransflowConfig);
 
 export default async function handler(
   req: NextApiRequest,

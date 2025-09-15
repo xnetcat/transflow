@@ -1,13 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { StatusLambdaClient } from "@xnetcat/transflow";
-import config from "../../transflow.config";
+import { StatusLambdaClient, type TransflowConfig } from "@xnetcat/transflow";
+import configModule from "../../transflow.config";
+
+const transflowConfig = configModule as TransflowConfig;
 
 // Create status Lambda client if enabled
-const statusClient = config.statusLambda?.enabled
+const statusClient = transflowConfig.statusLambda?.enabled
   ? new StatusLambdaClient({
-      region: config.region,
+      region: transflowConfig.region,
       functionName:
-        config.statusLambda.functionName || `${config.project}-status`,
+        transflowConfig.statusLambda.functionName ||
+        `${transflowConfig.project}-status`,
     })
   : null;
 
