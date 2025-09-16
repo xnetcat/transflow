@@ -24,5 +24,4 @@ jobs:
           role-session-name: transflow-cleanup
           aws-region: ${{ secrets.AWS_REGION }}
       - name: Cleanup
-        run: npx transflow cleanup --branch "${{ github.event.ref }}" --config transflow.config.json --yes
-
+        run: npx transflow cleanup --branch "${{ github.event.ref }}" --config transflow.config.js --yes

@@ -1,9 +1,29 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createStatusHandler, type TransflowConfig } from "@xnetcat/transflow";
-import transflowConfig from "../../transflow.config.js";
+import cfg from "../../transflow.config";
 
-const handler = createStatusHandler(transflowConfig as TransflowConfig);
+const handler = createStatusHandler(cfg as TransflowConfig);
 
 export default function api(req: NextApiRequest, res: NextApiResponse) {
-  return handler(req as any, res as any);
+  const t0 = Date.now();
+  console.log("[status] incoming", { query: req.query });
+  return handler(
+    {
+      query: req.query as any,
+      headers: req.headers as any,
+    } as any,
+    {
+      status(code: number) {
+        res.status(code);
+        return this as any;
+      },
+      json(body: unknown) {
+        res.json(body);
+        console.log("[status] response", {
+          status: res.statusCode,
+          elapsedMs: Date.now() - t0,
+        });
+      },
+    } as any
+  );
 }

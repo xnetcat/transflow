@@ -16,9 +16,7 @@ export async function bakeTemplates(params: {
     cwd: templatesDir,
     absolute: true,
   });
-  if (templateFiles.length === 0) {
-    throw new Error(`No templates found in ${templatesDir}`);
-  }
+  // Continue even if no templates are present; produce an empty index
   const entries: BakedTemplateIndexEntry[] = [];
   const buildOutDir = path.join(outDir, "templates");
   fs.mkdirSync(buildOutDir, { recursive: true });
@@ -54,9 +52,15 @@ export async function bakeTemplates(params: {
   ];
   fs.writeFileSync(indexFile, lines.join("\n"));
 
-  // Copy Dockerfile asset into build context if present
-  const dockerfileSrc = path.resolve(process.cwd(), "assets/Dockerfile");
-  if (fs.existsSync(dockerfileSrc)) {
+  // Copy Dockerfile asset into build context (prefer package assets)
+  const pkgDockerfile = path.resolve(__dirname, "../../assets/Dockerfile");
+  const cwdDockerfile = path.resolve(process.cwd(), "assets/Dockerfile");
+  const dockerfileSrc = fs.existsSync(pkgDockerfile)
+    ? pkgDockerfile
+    : fs.existsSync(cwdDockerfile)
+    ? cwdDockerfile
+    : undefined;
+  if (dockerfileSrc) {
     fs.copyFileSync(dockerfileSrc, path.join(outDir, "Dockerfile"));
   }
 
@@ -78,21 +82,51 @@ export async function bakeTemplates(params: {
     JSON.stringify(runtimePkg, null, 2)
   );
 
-  // Compile handler into build context
-  const handlerEntry = path.resolve(process.cwd(), "src/lambda/handler.ts");
-  const handlerOut = path.join(outDir, "dist/lambda/handler.js");
-  fs.mkdirSync(path.dirname(handlerOut), { recursive: true });
-  await esbuild.build({
-    entryPoints: [handlerEntry],
-    outfile: handlerOut,
-    bundle: true,
-    platform: "node",
-    target: ["node20"],
-    format: "cjs",
-    sourcemap: false,
-    logLevel: "silent",
-    external: ["ioredis", "@aws-sdk/*"],
-  });
+  // Compile/copy handlers into build context
+  const distDir = path.join(outDir, "dist/lambda");
+  fs.mkdirSync(distDir, { recursive: true });
+
+  // Prefer compiled JS from the installed package; fallback to building from TS when running from repo
+  const pkgRootDist = path.resolve(__dirname, "../"); // dist/core → dist
+  const candidateCompiledHandler = path.join(pkgRootDist, "lambda/handler.js");
+  const candidateCompiledStatus = path.join(
+    pkgRootDist,
+    "lambda/statusHandler.js"
+  );
+  const repoTsHandler = path.resolve(process.cwd(), "src/lambda/handler.ts");
+  const repoTsStatus = path.resolve(
+    process.cwd(),
+    "src/lambda/statusHandler.ts"
+  );
+
+  async function ensureFile(srcJs: string, srcTs: string, outJs: string) {
+    if (fs.existsSync(srcJs)) {
+      fs.copyFileSync(srcJs, outJs);
+      return;
+    }
+    await esbuild.build({
+      entryPoints: [srcTs],
+      outfile: outJs,
+      bundle: true,
+      platform: "node",
+      target: ["node20"],
+      format: "cjs",
+      sourcemap: false,
+      logLevel: "silent",
+      external: ["ioredis", "@aws-sdk/*"],
+    });
+  }
+
+  await ensureFile(
+    candidateCompiledHandler,
+    repoTsHandler,
+    path.join(distDir, "handler.js")
+  );
+  await ensureFile(
+    candidateCompiledStatus,
+    repoTsStatus,
+    path.join(distDir, "statusHandler.js")
+  );
 
   return { outDir, entries, indexFile };
 }

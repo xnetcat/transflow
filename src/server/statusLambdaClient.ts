@@ -13,7 +13,6 @@ export interface StatusClientConfig {
 
 export interface StatusCheckOptions {
   assemblyId: string;
-  userId?: string;
   triggerWebhook?: boolean;
 }
 
@@ -39,7 +38,6 @@ export class StatusLambdaClient {
   async checkStatus(options: StatusCheckOptions): Promise<StatusCheckResult> {
     const event: StatusLambdaEvent = {
       assemblyId: options.assemblyId,
-      userId: options.userId,
       triggerWebhook: options.triggerWebhook,
     };
 
@@ -89,39 +87,28 @@ export class StatusLambdaClient {
   /**
    * Convenience method to just get the status without webhook trigger
    */
-  async getStatus(
-    assemblyId: string,
-    userId?: string
-  ): Promise<StatusCheckResult> {
-    return this.checkStatus({ assemblyId, userId, triggerWebhook: false });
+  async getStatus(assemblyId: string): Promise<StatusCheckResult> {
+    return this.checkStatus({ assemblyId, triggerWebhook: false });
   }
 
   /**
    * Convenience method to get status and trigger webhook
    */
-  async getStatusWithWebhook(
-    assemblyId: string,
-    userId?: string
-  ): Promise<StatusCheckResult> {
-    return this.checkStatus({ assemblyId, userId, triggerWebhook: true });
+  async getStatusWithWebhook(assemblyId: string): Promise<StatusCheckResult> {
+    return this.checkStatus({ assemblyId, triggerWebhook: true });
   }
 }
 
 /**
  * Factory function to create a status client from Transflow config
+ * Status Lambda is always deployed with predictable name: {project}-status
  */
 export function createStatusClient(config: {
   region: string;
   project: string;
-  statusLambda?: { functionName?: string };
   awsProfile?: string;
-}): StatusLambdaClient | null {
-  if (!config.statusLambda) {
-    return null;
-  }
-
-  const functionName =
-    config.statusLambda.functionName || `${config.project}-status`;
+}): StatusLambdaClient {
+  const functionName = `${config.project}-status`;
 
   return new StatusLambdaClient({
     region: config.region,

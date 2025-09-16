@@ -1,16 +1,10 @@
-export type BranchIsolationMode = "bucket" | "prefix";
-
 export interface TransflowConfig {
   project: string;
   region: string;
   awsProfile?: string;
   s3: {
-    mode: BranchIsolationMode;
-    uploadBucket?: string; // required for prefix mode
-    outputBucket?: string; // required for prefix mode
-    baseBucket?: string; // optional base name for bucket-per-branch
-    // Optional explicit list of buckets managed by Transflow deploy (never deleted)
-    buckets?: string[];
+    // Optional explicit list of export buckets (never deleted)
+    exportBuckets?: string[];
     userIsolation?: boolean; // Enable user-based path isolation
     maxFileSize?: number; // Max file size in bytes
     allowedContentTypes?: string[]; // Restrict file types
@@ -19,7 +13,7 @@ export interface TransflowConfig {
   // When using shared resources, this is the single function name to deploy
   lambdaPrefix: string;
   templatesDir: string;
-  lambdaBuildContext: string;
+  // Removed; build context derived from project root
   dynamoDb: {
     tableName: string; // REQUIRED: single table for job/status storage
   };
@@ -32,13 +26,7 @@ export interface TransflowConfig {
     maxBatchSize?: number; // Max files to process per invocation
   };
   // Optional dedicated status Lambda for user-facing status checks
-  statusLambda?: {
-    enabled: boolean;
-    functionName?: string; // Override function name (defaults to {project}-status)
-    memoryMb?: number; // Memory override (defaults to 512MB)
-    timeoutSec?: number; // Timeout override (defaults to 30s)
-    roleArn?: string; // Role override (defaults to same as main lambda)
-  };
+  // Status Lambda is automatically deployed with name: {project}-status
   sqs: {
     // Shared processing queue across all branches
     queueName?: string;
@@ -46,13 +34,7 @@ export interface TransflowConfig {
     maxReceiveCount?: number; // For DLQ
     batchSize?: number; // SQS batch size (1-10)
   };
-  auth?: {
-    jwtSecret?: string; // For JWT validation
-    jwtIssuer?: string; // Expected JWT issuer
-    userIdClaim?: string; // JWT claim containing user ID (default: 'sub')
-    sessionCookieName?: string; // Session cookie name
-    requireAuth?: boolean; // Require authentication for uploads
-  };
+  // auth removed
 }
 
 export interface StepContextUtils {
@@ -75,6 +57,12 @@ export interface StepContextUtils {
   uploadToKey?: (
     localPath: string,
     absoluteKey: string,
+    contentType?: string
+  ) => Promise<{ bucket: string; key: string }>;
+  exportToBucket?: (
+    localPath: string,
+    key: string,
+    bucketName: string,
     contentType?: string
   ) => Promise<{ bucket: string; key: string }>;
   addArtifact?: (
@@ -147,6 +135,7 @@ export interface DeployOptions {
   tag?: string; // optional override tag
   yes?: boolean; // non-interactive
   configPath?: string;
+  forceRebuild?: boolean; // force docker image rebuild
 }
 
 export interface CleanupOptions {
@@ -180,6 +169,14 @@ export interface AssemblyStatus {
   execution_start?: string;
   jobs_queue_duration?: number;
   last_job_completed?: string;
+  // Progress tracking
+  progress_pct?: number; // 0-100
+  steps_total?: number;
+  steps_completed?: number;
+  current_step?: number; // 1-based index of current step
+  current_step_name?: string;
+  // Client-side upload progress (ephemeral, not guaranteed to persist server-side)
+  upload_progress_pct?: number; // 0-100
   merged_params?: Record<string, unknown>;
   uploads?: Array<{
     id: string;

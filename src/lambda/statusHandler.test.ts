@@ -102,7 +102,7 @@ describe("statusHandler", () => {
     });
   });
 
-  it("returns 403 if user doesn't own assembly", async () => {
+  it("does not enforce ownership (no-auth mode)", async () => {
     const mockAssembly = {
       assembly_id: "test-assembly",
       user: { userId: "other-user" },
@@ -119,15 +119,10 @@ describe("statusHandler", () => {
 
     const event: StatusLambdaEvent = {
       assemblyId: "test-assembly",
-      userId: "requesting-user",
     };
 
     const result = await handler(event);
-
-    expect(result.statusCode).toBe(403);
-    expect(JSON.parse(result.body)).toEqual({
-      error: "Access denied: You don't own this assembly",
-    });
+    expect(result.statusCode).toBe(200);
   });
 
   it("returns assembly status successfully", async () => {

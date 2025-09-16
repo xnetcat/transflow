@@ -6,6 +6,7 @@ import {
   type TransflowConfig,
 } from "@xnetcat/transflow";
 import transflowConfig from "../../transflow.config.js";
+// No auth/headers in no-auth mode
 
 const uploadHandler = createUploadHandler(transflowConfig as TransflowConfig);
 
@@ -18,6 +19,7 @@ export default async function handler(
     body: req.body as Record<string, unknown>,
     headers: req.headers as Record<string, string | string[] | undefined>,
   };
+
   let apiRes: ApiResponse;
   apiRes = {
     status(code: number) {
@@ -31,5 +33,15 @@ export default async function handler(
       res.setHeader(name, value);
     },
   };
-  return uploadHandler(apiReq, apiRes);
+
+  console.log("[create-upload] incoming", {
+    method: apiReq.method,
+    filename: (apiReq.body as any)?.filename,
+    template:
+      (apiReq.body as any)?.template || (apiReq.body as any)?.templateId,
+  });
+  const start = Date.now();
+  const result = await uploadHandler(apiReq, apiRes);
+  console.log("[create-upload] handled in", Date.now() - start, "ms");
+  return result;
 }

@@ -12,14 +12,26 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
   getSignedUrl: vi.fn().mockResolvedValue("https://mock-presigned-url.com"),
 }));
 
+vi.mock("@aws-sdk/client-dynamodb", () => ({
+  DynamoDBClient: vi.fn().mockImplementation(() => ({})),
+}));
+
+vi.mock("@aws-sdk/lib-dynamodb", () => ({
+  DynamoDBDocumentClient: {
+    from: vi.fn().mockImplementation(() => ({
+      send: vi.fn().mockResolvedValue({}),
+    })),
+  },
+  PutCommand: vi.fn().mockImplementation((params) => params),
+}));
+
 const cfg: TransflowConfig = {
   project: "p",
   region: "us-east-1",
-  s3: { mode: "prefix", uploadBucket: "ub", outputBucket: "ob" },
+  s3: { exportBuckets: ["ob"] },
   ecrRepo: "repo",
   lambdaPrefix: "lp-",
   templatesDir: "./t",
-  lambdaBuildContext: "./l",
   dynamoDb: { tableName: "test-table" },
   lambda: { memoryMb: 512, timeoutSec: 60 },
   sqs: {
@@ -28,10 +40,10 @@ const cfg: TransflowConfig = {
     maxReceiveCount: 3,
     batchSize: 10,
   },
-};
+} as any;
 
 describe("createUploadHandler", () => {
-  it("returns presigned metadata", async () => {
+  it("returns presigned URL and key without metadata", async () => {
     const handler = createUploadHandler(cfg);
     const res: any = {
       status: vi.fn().mockReturnThis(),
@@ -44,7 +56,6 @@ describe("createUploadHandler", () => {
         filename: "a.txt",
         contentType: "text/plain",
         templateId: "t1",
-        fileHash: "abc123",
       },
       headers: {},
     };
@@ -64,16 +75,15 @@ describe("createUploadHandler", () => {
       setHeader: vi.fn(),
     };
 
-    // Test with explicit branch header and fileHash
+    // Branch comes from env (default main)
     const req = {
       method: "POST",
       body: {
         filename: "test.txt",
         contentType: "text/plain",
         templateId: "t1",
-        fileHash: "abc123def456",
       },
-      headers: { "x-transflow-branch": "feature-x" },
+      headers: {},
     };
 
     await handler(req as any, res);
@@ -81,39 +91,15 @@ describe("createUploadHandler", () => {
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
         assembly_id: expect.any(String),
-        uploadId: expect.any(String),
+        upload_id: expect.any(String),
+        presigned_url: expect.any(String),
       })
     );
   });
 
-  it("requires fileHash for single uploads", async () => {
-    const handler = createUploadHandler(cfg);
-    const res: any = {
-      status: vi.fn().mockReturnThis(),
-      json: vi.fn(),
-      setHeader: vi.fn(),
-    };
+  // No longer require fileHash
 
-    const req = {
-      method: "POST",
-      body: {
-        filename: "test.txt",
-        contentType: "text/plain",
-        templateId: "t1",
-        // Missing fileHash
-      },
-      headers: {}, // No branch header
-    };
-
-    await handler(req as any, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      error: "fileHash required for single file upload",
-    });
-  });
-
-  it("requires md5hash for all batch uploads", async () => {
+  it("accepts batch uploads without md5hash", async () => {
     const handler = createUploadHandler(cfg);
     const res: any = {
       status: vi.fn().mockReturnThis(),
@@ -128,21 +114,27 @@ describe("createUploadHandler", () => {
           {
             filename: "file1.txt",
             contentType: "text/plain",
-            md5hash: "hash1",
           },
-          { filename: "file2.txt", contentType: "text/plain" }, // Missing md5hash
+          { filename: "file2.txt", contentType: "text/plain" },
         ],
         templateId: "t1",
       },
-      headers: { "x-transflow-branch": "staging" },
+      headers: {},
     };
 
     await handler(req as any, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      error:
-        "md5hash required for all files in batch upload. Missing for: file2.txt",
-    });
+    expect(res.status).not.toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assembly_id: expect.any(String),
+        upload_id: expect.any(String),
+        files: expect.arrayContaining([
+          expect.objectContaining({
+            filename: "file1.txt",
+            presigned_url: expect.any(String),
+          }),
+        ]),
+      })
+    );
   });
 });

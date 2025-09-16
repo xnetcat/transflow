@@ -3,8 +3,8 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import path from "path";
 import fs from "fs";
-import { bakeTemplates } from "../core/bake";
-import { loadConfig, sanitizeBranch } from "../core/config";
+import { loadConfigObject, sanitizeBranch } from "../core/config";
+import { loadConfig } from "./util/loadConfig";
 
 function resolveOutDir(cfgOut: string) {
   const abs = path.isAbsolute(cfgOut)
@@ -16,39 +16,6 @@ function resolveOutDir(cfgOut: string) {
 void yargs(hideBin(process.argv))
   .scriptName("transflow")
   .command(
-    "bake",
-    "Bundle templates to Docker build context",
-    (y) =>
-      y
-        .option("config", {
-          type: "string",
-          describe: "Path to transflow.config.json",
-        })
-        .option("templates", {
-          type: "string",
-          describe: "Templates directory override",
-        })
-        .option("out", {
-          type: "string",
-          describe: "Output build context directory override",
-        })
-        .demandOption([], ""),
-    async (argv) => {
-      const cfg = await loadConfig(argv.config as string | undefined);
-      const templatesDir = argv.templates
-        ? String(argv.templates)
-        : cfg.templatesDir;
-      const outDir = resolveOutDir(
-        (argv.out as string | undefined) ?? cfg.lambdaBuildContext
-      );
-      const result = await bakeTemplates({ templatesDir, outDir });
-      console.log(
-        `Baked ${result.entries.length} templates to ${result.outDir}`
-      );
-      console.log(`Index: ${result.indexFile}`);
-    }
-  )
-  .command(
     "deploy",
     "Build/push Lambda image and configure AWS resources",
     (y) =>
@@ -57,18 +24,18 @@ void yargs(hideBin(process.argv))
         .option("sha", { type: "string", demandOption: true })
         .option("tag", { type: "string" })
         .option("yes", { type: "boolean", default: false })
+        .option("force-rebuild", {
+          type: "boolean",
+          default: false,
+          describe: "Force docker image rebuild (no cache)",
+        })
         .option("config", { type: "string" }),
     async (argv) => {
       const cfg = await loadConfig(argv.config as string | undefined);
       const safeBranch = sanitizeBranch(String(argv.branch));
       const sha = String(argv.sha);
       const tag = (argv.tag as string | undefined) ?? `${safeBranch}-${sha}`;
-      const buildContext = resolveOutDir(cfg.lambdaBuildContext);
-      if (!fs.existsSync(path.join(buildContext, "templates.index.cjs"))) {
-        throw new Error(
-          `templates.index.cjs not found in ${buildContext}. Run 'transflow bake' first.`
-        );
-      }
+      // No separate bake step required; deploy will prepare build context
       const { deploy } = await import("./tasks/deploy.js");
       await deploy({
         cfg,
@@ -76,6 +43,7 @@ void yargs(hideBin(process.argv))
         sha,
         tag,
         nonInteractive: !!argv.yes,
+        forceRebuild: !!argv["force-rebuild"],
       });
     }
   )
@@ -99,6 +67,28 @@ void yargs(hideBin(process.argv))
         nonInteractive: !!argv.yes,
         deleteStorage: !!argv["delete-storage"],
         deleteEcrImages: !!argv["delete-ecr-images"],
+      });
+    }
+  )
+  .command(
+    "destroy",
+    "Destroy ALL Transflow AWS resources for this project (WARNING: destructive!)",
+    (y) =>
+      y
+        .option("force", {
+          type: "boolean",
+          default: false,
+          describe: "Skip confirmation",
+        })
+        .option("yes", { type: "boolean", default: false })
+        .option("config", { type: "string" }),
+    async (argv) => {
+      const cfg = await loadConfig(argv.config as string | undefined);
+      const { destroy } = await import("./tasks/destroy.js");
+      await destroy({
+        cfg,
+        force: !!argv.force,
+        nonInteractive: !!argv.yes,
       });
     }
   )

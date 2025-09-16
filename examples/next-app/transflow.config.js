@@ -1,21 +1,16 @@
 module.exports = {
   project: "example",
-  region: "us-east-1",
+  region: "eu-north-1",
 
-  // S3 buckets (created if missing, never deleted)
+  // S3 export buckets (created if missing). Tmp bucket is automatic.
   s3: {
-    buckets: ["example-uploads", "example-outputs"],
-    mode: "prefix",
-    uploadBucket: "example-uploads",
-    outputBucket: "example-outputs",
-    userIsolation: true,
+    exportBuckets: ["example-outputs"],
   },
 
   // Container registry
   ecrRepo: "transflow-worker",
   lambdaPrefix: "transflow-worker-",
   templatesDir: "./templates",
-  lambdaBuildContext: "./lambda",
 
   // DynamoDB (required for status tracking)
   dynamoDb: {
@@ -30,26 +25,12 @@ module.exports = {
     batchSize: 10,
   },
 
-  // Optional: Status Lambda for direct API calls
-  statusLambda: {
-    enabled: true,
-    functionName: "example-status",
-    memoryMb: 512,
-    timeoutSec: 30,
-  },
-
-  // Authentication (optional for demo)
-  auth: {
-    requireAuth: false, // Set to true in production
-    jwtSecret: process.env.JWT_SECRET,
-    userIdClaim: "sub",
-  },
-
+  // Status Lambda is automatically deployed as: example-status
   lambda: {
     memoryMb: 1024,
     timeoutSec: 300,
     roleArn:
       process.env.TRANSFLOW_LAMBDA_ROLE_ARN ||
-      "arn:aws:iam::<ACCOUNT_ID>:role/transflow-lambda-role",
+      "arn:aws:iam::<YOUR_ACCOUNT_ID>:role/transflow-lambda-role",
   },
 };

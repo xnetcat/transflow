@@ -31,12 +31,28 @@ vi.mock("@aws-sdk/client-s3", () => ({
       if (command.constructor.name === "PutObjectCommand") {
         return Promise.resolve({});
       }
+      if (command.constructor.name === "DeleteObjectCommand") {
+        return Promise.resolve({});
+      }
       return Promise.resolve({});
     }),
   })),
-  GetObjectCommand: vi.fn().mockImplementation((params) => ({ ...params, constructor: { name: "GetObjectCommand" } })),
-  PutObjectCommand: vi.fn().mockImplementation((params) => ({ ...params, constructor: { name: "PutObjectCommand" } })),
-  HeadObjectCommand: vi.fn().mockImplementation((params) => ({ ...params, constructor: { name: "HeadObjectCommand" } })),
+  GetObjectCommand: vi.fn().mockImplementation((params) => ({
+    ...params,
+    constructor: { name: "GetObjectCommand" },
+  })),
+  PutObjectCommand: vi.fn().mockImplementation((params) => ({
+    ...params,
+    constructor: { name: "PutObjectCommand" },
+  })),
+  HeadObjectCommand: vi.fn().mockImplementation((params) => ({
+    ...params,
+    constructor: { name: "HeadObjectCommand" },
+  })),
+  DeleteObjectCommand: vi.fn().mockImplementation((params) => ({
+    ...params,
+    constructor: { name: "DeleteObjectCommand" },
+  })),
 }));
 
 vi.mock("@aws-sdk/client-dynamodb", () => ({
@@ -162,7 +178,8 @@ const originalRequire = globalThis.require;
     modulePath === "mocked-templates-path" ||
     modulePath.includes("templates.index.cjs") ||
     modulePath === "/test/templates.index.cjs" ||
-    modulePath === "/Users/xnetcat/Projects/xnetcat/transflow/templates.index.cjs"
+    modulePath ===
+      "/Users/xnetcat/Projects/xnetcat/transflow/templates.index.cjs"
   ) {
     return {
       "test-template": mockTemplate,
@@ -196,6 +213,8 @@ process.env.DYNAMODB_TABLE = "test-transflow-jobs";
 process.env.MAX_BATCH_SIZE = "2";
 process.env.TRANSFLOW_PROJECT = "test-project";
 process.env.TEMPLATES_INDEX_PATH = "/test/templates.index.cjs";
+process.env.TRANSFLOW_ALLOWED_BUCKETS = JSON.stringify(["test-bucket"]);
+process.env.TRANSFLOW_TMP_BUCKET = "test-bucket";
 
 describe("handler", () => {
   beforeEach(() => {
@@ -210,7 +229,9 @@ describe("handler", () => {
         {
           s3: {
             bucket: { name: "test-bucket" },
-            object: { key: "uploads/main/test-upload-123/file1.mp3" },
+            object: {
+              key: "uploads/main/test-upload-123/test-template/file1.mp3",
+            },
           },
         },
       ],
@@ -231,7 +252,7 @@ describe("handler", () => {
             objects: [
               {
                 bucket: "test-bucket",
-                key: "uploads/main/test-upload-123/file1.mp3",
+                key: "uploads/main/test-upload-123/test-template/file1.mp3",
               },
             ],
             branch: "main",
@@ -257,7 +278,7 @@ describe("handler", () => {
           objects: [
             {
               bucket: "test-bucket",
-              key: `uploads/main/test-upload-${i}/file.mp3`,
+              key: `uploads/main/test-upload-${i}/test-template/file.mp3`,
             },
           ],
           branch: "main",
@@ -311,6 +332,8 @@ describe("handler", () => {
     };
 
     // Should reject with template not found error
-    await expect(handler(sqsEvent)).rejects.toThrow("Template not found: nonexistent-template");
+    await expect(handler(sqsEvent)).rejects.toThrow(
+      "Template not found: nonexistent-template"
+    );
   });
 });

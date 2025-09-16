@@ -1,11 +1,6 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand } from "@aws-sdk/lib-dynamodb";
-import type {
-  TransflowConfig,
-  AssemblyStatus,
-  UserContext,
-} from "../core/types";
-import { extractUserContext, AuthenticationError } from "./auth";
+import type { TransflowConfig, AssemblyStatus } from "../core/types";
 
 export interface StatusRequest {
   query?: Record<string, string | string[]>;
@@ -35,22 +30,7 @@ export function createStatusHandler(cfg: TransflowConfig) {
       return;
     }
 
-    // Extract and validate user context
-    let userContext: UserContext | null = null;
-    try {
-      userContext = await extractUserContext(req as any, cfg);
-    } catch (error) {
-      if (error instanceof AuthenticationError) {
-        res.status(401).json({ error: "Authentication required" });
-        return;
-      }
-      throw error;
-    }
-
-    if (!userContext) {
-      res.status(401).json({ error: "Authentication required" });
-      return;
-    }
+    // No auth/ownership checks in no-auth mode
 
     const q = req.query || {};
     const idParam = q["assemblyId"] ?? q["assembly_id"];
@@ -76,13 +56,7 @@ export function createStatusHandler(cfg: TransflowConfig) {
 
       const assembly = resp.Item as AssemblyStatus;
 
-      // Check ownership: user must own this assembly
-      if (assembly.user?.userId !== userContext.userId) {
-        res
-          .status(403)
-          .json({ error: "Access denied: You don't own this assembly" });
-        return;
-      }
+      // No ownership enforcement
 
       res.status(200).json(assembly);
     } catch (error: any) {

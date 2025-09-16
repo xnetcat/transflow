@@ -1,7 +1,7 @@
 {
   "name": "@xnetcat/transflow",
-  "version": "0.1.0",
-  "description": "Transflow: serverless media-processing pipelines for Next.js (S3 + Lambda + SQS)",
+  "version": "1.0.0",
+  "description": "Production-ready serverless file processing pipeline for AWS",
   "license": "MIT",
   "author": "xnetcat <xnetcat.dev@gmail.com>",
   "repository": {
@@ -16,15 +16,24 @@
   "main": "dist/index.js",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.js"
     },
-    "./browser": {
-      "import": "./dist/browser.js",
-      "require": "./dist/browser.js"
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "import": "./dist/web/index.js",
+      "require": "./dist/web/index.js"
     }
   },
   "types": "dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "web": [
+        "dist/web/index.d.ts"
+      ]
+    }
+  },
   "bin": {
     "transflow": "dist/cli/index.js"
   },
@@ -56,8 +65,7 @@
     "clean": "rm -rf dist",
     "dev": "tsc -w -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "prepare": "npm run build"
+    "test": "vitest run"
   },
   "engines": {
     "node": ">=18"
@@ -81,10 +89,10 @@
     "ora": "^8.0.1",
     "semver": "^7.6.3",
     "yargs": "^17.7.2",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "@aws-sdk/client-sqs": "^3.888.0"
   },
   "devDependencies": {
-    "@aws-sdk/client-sqs": "^3.882.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/user-event": "^14.5.2",
     "@types/crypto-js": "^4.2.2",
@@ -95,8 +103,6 @@
     "@types/yargs": "^17.0.32",
     "aws-sdk-client-mock": "^3.1.0",
     "jsdom": "^26.1.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
   },

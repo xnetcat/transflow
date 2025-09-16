@@ -25,17 +25,20 @@ describe("localRun", () => {
     const cfg = {
       project: "p",
       region: "us-east-1",
-      s3: { mode: "prefix", uploadBucket: "ub", outputBucket: "ob" },
+      s3: { exportBuckets: ["ob"] },
       ecrRepo: "repo",
       lambdaPrefix: "lp-",
       templatesDir,
-      lambdaBuildContext: lambdaCtx,
-      redis: { provider: "upstash", restUrl: "u", token: "t" },
+      dynamoDb: { tableName: "test-table" },
       lambda: { memoryMb: 512, timeoutSec: 60 },
     } as const;
     const input = path.join(root, "input.txt");
     fs.writeFileSync(input, "hello");
-    const res = await localRun({ cfg: cfg as any, filePath: input });
+    const res = await localRun({
+      cfg: cfg as any,
+      filePath: input,
+      outDir: lambdaCtx,
+    });
     expect(res.outputsDir).toBeDefined();
   });
 });

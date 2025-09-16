@@ -9,6 +9,7 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   HeadObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -41,12 +42,11 @@ type S3Object = {
 };
 
 type ProcessingJob = {
+  assemblyId: string;
   uploadId: string;
   templateId: string;
   objects: S3Object[];
   branch: string;
-  fields?: Record<string, string>;
-  user?: UserContext;
 };
 
 type UnifiedEvent = S3EventLike | SQSEventLike;
@@ -54,12 +54,13 @@ type UnifiedEvent = S3EventLike | SQSEventLike;
 import type {
   TemplateDefinition,
   StepContext,
-  UserContext,
   AssemblyStatus,
 } from "../core/types";
-import { generateUserOutputPath } from "../web/auth";
 
 function loadTemplatesIndex(): any {
+  // Prefer a globally stubbed require in tests, fall back to module require
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reqFunc: any = (globalThis as any).require || require;
   const candidates = [
     process.env.TEMPLATES_INDEX_PATH,
     "/var/task/templates.index.cjs",
@@ -70,8 +71,7 @@ function loadTemplatesIndex(): any {
 
   for (const candidate of candidates) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      return require(candidate);
+      return reqFunc(candidate);
     } catch (_) {
       // try next candidate
     }
@@ -87,16 +87,14 @@ function getSQS() {
 
 function computeAssemblyIdFromObjects(
   objects: S3Object[],
-  templateId: string,
-  user?: UserContext
+  templateId: string
 ): string {
-  // Fallback computation when assembly_id is not in metadata
-  const userId = user?.userId || "anonymous";
+  // Temporary computation based on keys + template (will be MD5-based later)
   const objectKeys = objects
     .map((obj) => obj.key)
     .sort()
     .join(",");
-  const input = `${objectKeys}:${templateId}:${userId}`;
+  const input = `${objectKeys}:${templateId}`;
   return createHash("sha256").update(input).digest("hex");
 }
 
@@ -106,7 +104,7 @@ async function sendWebhookWithRetries(
   secret?: string,
   maxRetries = 3
 ): Promise<void> {
-  const body = JSON.stringify(payload);
+  const body = JSON.stringify(payload ?? {});
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -186,95 +184,69 @@ async function parseS3Jobs(
   event: S3EventLike,
   s3: S3Client
 ): Promise<ProcessingJob[]> {
-  const expanded: Array<{
+  type Expanded = {
     bucket: string;
     key: string;
-    head: any;
-    meta: Record<string, string>;
-    uploadId: string;
-    templateId: string;
-    fields?: Record<string, string>;
-    userContext?: UserContext;
-  }> = [];
+    branch: string;
+    assemblyId: string;
+    uploadId?: string;
+    templateId?: string;
+  };
+  const expanded: Expanded[] = [];
 
-  // Process S3 events like before
   for (const record of event.Records ?? []) {
     const bucket = record.s3.bucket.name;
     const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, " "));
-    const head = await s3.send(
-      new HeadObjectCommand({ Bucket: bucket, Key: key })
-    );
-    const meta = (head.Metadata || {}) as Record<string, string>;
-    const uploadId =
-      (meta.uploadid as string) || (meta.uploadId as string) || "";
-    const templateId =
-      (meta.templateid as string) ||
-      (meta.templateId as string) ||
-      (process.env.DEFAULT_TEMPLATE_ID as string) ||
-      "";
 
-    // Extract user context from metadata
-    let userContext: UserContext | undefined;
-    if (meta.userid) {
-      userContext = {
-        userId: meta.userid,
-        permissions: meta.permissions ? JSON.parse(meta.permissions) : [],
-        metadata: {},
-      };
+    // New key structure: uploads/{branch}/{assemblyId}/{filename}
+    const m = key.match(/^uploads\/([^/]+)\/([^/]+)\//);
+    if (!m) {
+      console.warn(`Key does not match expected layout: ${key}`);
+      continue;
     }
+    const [, branch, assemblyId] = m;
 
-    let fields: Record<string, string> | undefined;
-    if (typeof meta.fields === "string") {
-      try {
-        const decoded = Buffer.from(meta.fields, "base64").toString("utf8");
-        const parsed = JSON.parse(decoded);
-        if (parsed && typeof parsed === "object") {
-          fields = Object.fromEntries(
-            Object.entries(parsed).map(([k, v]) => [k, String(v)])
-          );
-        }
-      } catch {}
+    // Get metadata from S3 object to extract templateId and uploadId
+    try {
+      const head = await s3.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: key })
+      );
+      const metadata = head.Metadata || {};
+      expanded.push({
+        bucket,
+        key,
+        branch,
+        assemblyId,
+        uploadId: metadata["upload-id"],
+        templateId: metadata["template-id"],
+      });
+    } catch (err) {
+      console.warn(`Failed to get metadata for ${key}:`, err);
+      continue;
     }
-    expanded.push({
-      bucket,
-      key,
-      head,
-      meta,
-      uploadId,
-      templateId,
-      fields,
-      userContext,
-    });
   }
 
-  // Group by uploadId
-  const groups = new Map<string, typeof expanded>();
+  // Group by assemblyId (not uploadId:templateId anymore)
+  const groups = new Map<string, Expanded[]>();
   for (const rec of expanded) {
-    const id = rec.uploadId || `solo:${rec.bucket}:${rec.key}`;
-    const list = groups.get(id) || ([] as typeof expanded);
+    const list = groups.get(rec.assemblyId) || ([] as Expanded[]);
     list.push(rec);
-    groups.set(id, list);
+    groups.set(rec.assemblyId, list);
   }
 
-  // Convert to ProcessingJobs
   const jobs: ProcessingJob[] = [];
-
-  for (const [groupId, items] of groups) {
+  for (const [assemblyId, items] of groups) {
     const first = items[0];
-    const uploadId = groupId.replace(/^solo:/, "");
-
-    // Extract branch from key: uploads/{branch}/...
-    let derivedBranch = "";
-    const match = first.key.match(/^uploads\/([^/]+)\//);
-    if (match) derivedBranch = match[1];
-
+    if (!first.templateId || !first.uploadId) {
+      console.warn(`Missing metadata for assembly ${assemblyId}`);
+      continue;
+    }
     jobs.push({
-      uploadId,
+      assemblyId,
+      uploadId: first.uploadId,
       templateId: first.templateId,
-      objects: items.map((item) => ({ bucket: item.bucket, key: item.key })),
-      branch: derivedBranch,
-      fields: first.fields,
-      user: first.userContext,
+      branch: first.branch,
+      objects: items.map((i) => ({ bucket: i.bucket, key: i.key })),
     });
   }
 
@@ -317,7 +289,21 @@ async function processJob(
   sqs: SQSClient,
   ddb?: DynamoDBDocumentClient
 ) {
-  const { uploadId, templateId, objects, branch, fields, user } = job;
+  const { assemblyId, uploadId, templateId, objects, branch } = job;
+  // Predeclare hash collections for use in success and error paths
+  const md5Hashes: string[] = [];
+  const etagHashes: string[] = [];
+
+  // Enforce buckets: inputs must be in allowed list and in tmp bucket
+  const allowedBucketsEnv = process.env.TRANSFLOW_ALLOWED_BUCKETS || "[]";
+  const allowedBuckets = JSON.parse(allowedBucketsEnv) as string[];
+  const tmpBucket = process.env.TRANSFLOW_TMP_BUCKET || allowedBuckets[0];
+  const allowedInputBuckets = new Set<string>([tmpBucket, ...allowedBuckets]);
+  for (const obj of objects) {
+    if (!allowedInputBuckets.has(obj.bucket)) {
+      throw new Error(`Bucket not allowed: ${obj.bucket}`);
+    }
+  }
 
   try {
     // Load baked template (path-agnostic: env → /var/task → fallbacks)
@@ -328,42 +314,65 @@ async function processJob(
     const tpl: TemplateDefinition = mod.default;
 
     const tmpDir = fs.mkdtempSync(path.join("/tmp", `transflow-`));
-    const outputBucket =
-      tpl.outputBucket || process.env.OUTPUT_BUCKET || objects[0].bucket;
+    // Output bucket must be explicitly set in template, otherwise use tmp/input bucket
+    const outputBucket = tpl.outputBucket || objects[0].bucket;
+    const outputPrefix = `outputs/${branch}/${uploadId}/${templateId}/`;
 
-    // Generate secure output path based on user context
-    let outputPrefix: string;
-    if (user) {
-      outputPrefix = generateUserOutputPath(user.userId, branch, uploadId);
-    } else {
-      outputPrefix = `outputs/${branch}/${uploadId}/`;
-    }
-
-    // Download all inputs and build uploads[] for status
+    // Download all inputs, compute MD5, and build uploads[] for status
     const inputsLocalPaths: string[] = [];
     const inputs: Array<{ bucket: string; key: string; contentType?: string }> =
       [];
     const uploads: AssemblyStatus["uploads"] = [];
     let bytesExpected = 0;
+    // md5Hashes declared above for error-path reuse
 
     for (const obj of objects) {
       const p = path.join(tmpDir, path.basename(obj.key));
+      // Get content info
+      const head = await s3.send(
+        new HeadObjectCommand({ Bucket: obj.bucket, Key: obj.key })
+      );
+      if (head.ETag) {
+        etagHashes.push(String(head.ETag).replace(/"/g, ""));
+      }
       const s3Obj = await s3.send(
         new GetObjectCommand({ Bucket: obj.bucket, Key: obj.key })
       );
 
-      // Get content type from HEAD request for context
-      const head = await s3.send(
-        new HeadObjectCommand({ Bucket: obj.bucket, Key: obj.key })
-      );
-
-      const stream = s3Obj.Body as any as NodeJS.ReadableStream;
+      const stream: any = s3Obj.Body as any;
       await new Promise<void>((resolve, reject) => {
         const w = fs.createWriteStream(p);
-        stream.pipe(w);
         w.on("finish", () => resolve());
         w.on("error", reject);
+        if (stream && typeof stream.pipe === "function") {
+          stream.on?.("error", reject);
+          stream.pipe(w);
+        } else if (stream && typeof stream.getReader === "function") {
+          // Web ReadableStream fallback
+          const reader = stream.getReader();
+          const pump = () =>
+            reader
+              .read()
+              .then(({ done, value }: any) => {
+                if (done) {
+                  w.end();
+                  return;
+                }
+                w.write(Buffer.from(value), (err) => {
+                  if (err) reject(err);
+                  else pump();
+                });
+              })
+              .catch(reject);
+          pump();
+        } else {
+          reject(new Error("Unsupported S3 Body stream type"));
+        }
       });
+      const computedMd5 = createHash("md5")
+        .update(fs.readFileSync(p))
+        .digest("hex");
+      md5Hashes.push(computedMd5);
       inputsLocalPaths.push(p);
       inputs.push({
         bucket: obj.bucket,
@@ -376,10 +385,7 @@ async function processJob(
       const filename = path.basename(obj.key);
       const ext = path.extname(filename).slice(1);
       const basename = path.basename(filename, path.extname(filename));
-      const md5hash = head.Metadata?.assemblyid
-        ? // Extract from metadata if present
-          undefined
-        : head.ETag?.replace(/"/g, ""); // Use S3 ETag as fallback
+      const md5hash = computedMd5;
 
       uploads!.push({
         id: `upload_${randomUUID()}`,
@@ -413,18 +419,29 @@ async function processJob(
       utils: {
         execFF,
         execProbe,
+        exportToBucket: async (localPath, key, bucketName, contentType) => {
+          if (!allowedBuckets.includes(bucketName)) {
+            throw new Error(`Export bucket not allowed: ${bucketName}`);
+          }
+          const body = fs.readFileSync(localPath);
+          const outKey = `${outputPrefix}${key}`.replace(/\\/g, "/");
+          await s3.send(
+            new PutObjectCommand({
+              Bucket: bucketName,
+              Key: outKey,
+              Body: body,
+              ContentType: contentType,
+            })
+          );
+          return { bucket: bucketName, key: outKey };
+        },
         uploadResult: async (localPath, destKey, contentType) => {
           const body = fs.readFileSync(localPath);
           const outKey = `${outputPrefix}${destKey}`.replace(/\\/g, "/");
 
-          // Additional validation for user-isolated uploads
-          if (user && outKey.includes("/users/")) {
-            const expectedUserPath = `/users/${user.userId}/`;
-            if (!outKey.includes(expectedUserPath)) {
-              throw new Error(
-                `Access denied: Cannot write to path outside user directory`
-              );
-            }
+          // Enforce allowed buckets for outputs (allow tmp bucket as well)
+          if (!new Set([tmpBucket, ...allowedBuckets]).has(outputBucket)) {
+            throw new Error(`Output bucket not allowed: ${outputBucket}`);
           }
 
           await s3.send(
@@ -463,44 +480,113 @@ async function processJob(
           console.log("Template publish call (no-op):", message);
         },
       },
-      fields,
-      user,
     };
 
-    // Compute deterministic assemblyId from metadata if present
-    // We expect S3 object metadata to include assemblyid when uploaded via our handler
-    const head0 = await s3.send(
-      new HeadObjectCommand({ Bucket: objects[0].bucket, Key: objects[0].key })
-    );
-    const meta0 = (head0.Metadata || {}) as Record<string, string>;
-    const assemblyId =
-      (meta0.assemblyid as string) || `${branch}:${uploadId}:${templateId}`;
+    // Assembly ID is already provided from the upload handler
     const tableName = process.env.DYNAMODB_TABLE as string;
     const nowIso = new Date().toISOString();
 
-    // Initialize assembly status
+    // Update assembly status (already created by upload handler)
     if (ddb && tableName) {
-      const base: AssemblyStatus = {
-        assembly_id: assemblyId,
-        message: "Processing started",
-        project: process.env.TRANSFLOW_PROJECT || undefined,
-        branch,
-        template_id: templateId,
-        user: user ? { userId: user.userId } : undefined,
-        uploads: uploads || [],
-        results: {},
-        bytes_expected: bytesExpected,
-        bytes_received: bytesExpected, // All bytes downloaded successfully
-        execution_start: nowIso,
-        created_at: nowIso,
-        updated_at: nowIso,
-      };
-      await ddb.send(new PutCommand({ TableName: tableName, Item: base }));
+      await ddb.send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { assembly_id: assemblyId },
+          UpdateExpression:
+            "SET #msg = :msg, #start = :start, #updated = :updated, #uploads = :uploads, #bytes = :bytes, #stepsTotal = :stepsTotal, #stepsCompleted = :stepsCompleted, #currentStep = :currentStep, #currentStepName = :currentStepName, #progress = :progress",
+          ExpressionAttributeNames: {
+            "#msg": "message",
+            "#start": "execution_start",
+            "#updated": "updated_at",
+            "#uploads": "uploads",
+            "#bytes": "bytes_received",
+            "#stepsTotal": "steps_total",
+            "#stepsCompleted": "steps_completed",
+            "#currentStep": "current_step",
+            "#currentStepName": "current_step_name",
+            "#progress": "progress_pct",
+          },
+          ExpressionAttributeValues: {
+            ":msg": "Processing started",
+            ":start": nowIso,
+            ":updated": nowIso,
+            ":uploads": uploads || [],
+            ":bytes": bytesExpected,
+            ":stepsTotal": tpl.steps?.length ?? 0,
+            ":stepsCompleted": 0,
+            ":currentStep": 0,
+            ":currentStepName": "",
+            ":progress": 0,
+          },
+        })
+      );
     }
 
+    let stepIndex = 0;
+    const totalSteps = tpl.steps?.length ?? 0;
     for (const step of tpl.steps) {
+      stepIndex += 1;
       ctx.currentStepName = step.name;
+      // Update progress before running the step
+      if (ddb && tableName) {
+        const now = new Date().toISOString();
+        const progress = Math.max(
+          0,
+          Math.min(
+            100,
+            Math.floor(((stepIndex - 1) / Math.max(1, totalSteps)) * 100)
+          )
+        );
+        await ddb.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { assembly_id: assemblyId },
+            UpdateExpression:
+              "SET #updated = :updated, #currentStep = :currentStep, #currentStepName = :currentStepName, #stepsCompleted = :stepsCompleted, #progress = :progress",
+            ExpressionAttributeNames: {
+              "#updated": "updated_at",
+              "#currentStep": "current_step",
+              "#currentStepName": "current_step_name",
+              "#stepsCompleted": "steps_completed",
+              "#progress": "progress_pct",
+            },
+            ExpressionAttributeValues: {
+              ":updated": now,
+              ":currentStep": stepIndex,
+              ":currentStepName": step.name,
+              ":stepsCompleted": stepIndex - 1,
+              ":progress": progress,
+            },
+          })
+        );
+      }
       await step.run(ctx);
+      // Update progress after step completes
+      if (ddb && tableName) {
+        const now = new Date().toISOString();
+        const progress = Math.max(
+          0,
+          Math.min(100, Math.floor((stepIndex / Math.max(1, totalSteps)) * 100))
+        );
+        await ddb.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { assembly_id: assemblyId },
+            UpdateExpression:
+              "SET #updated = :updated, #stepsCompleted = :stepsCompleted, #progress = :progress",
+            ExpressionAttributeNames: {
+              "#updated": "updated_at",
+              "#stepsCompleted": "steps_completed",
+              "#progress": "progress_pct",
+            },
+            ExpressionAttributeValues: {
+              ":updated": now,
+              ":stepsCompleted": stepIndex,
+              ":progress": progress,
+            },
+          })
+        );
+      }
     }
 
     const result = {
@@ -530,7 +616,7 @@ async function processJob(
           TableName: tableName,
           Key: { assembly_id: assemblyId },
           UpdateExpression:
-            "SET ok = :ok, message = :msg, last_job_completed = :ljc, updated_at = :ua, execution_duration = :dur, results = :results",
+            "SET ok = :ok, message = :msg, last_job_completed = :ljc, updated_at = :ua, execution_duration = :dur, results = :results, progress_pct = :progress",
           ExpressionAttributeValues: {
             ":ok": "ASSEMBLY_COMPLETED",
             ":msg": "Processing completed",
@@ -538,6 +624,7 @@ async function processJob(
             ":ua": doneIso,
             ":dur": executionDuration,
             ":results": ctx.stepResults || {},
+            ":progress": 100,
           },
         })
       );
@@ -564,26 +651,49 @@ async function processJob(
         console.error("Failed to send webhook:", webhookError);
       }
     }
+
+    // Delete inputs from tmp bucket
+    await Promise.all(
+      objects
+        .filter((o) => o.bucket === tmpBucket)
+        .map((o) =>
+          s3.send(new DeleteObjectCommand({ Bucket: o.bucket, Key: o.key }))
+        )
+    );
   } catch (err) {
+    // On error also attempt cleanup of tmp bucket objects
+    try {
+      await Promise.all(
+        objects
+          .filter((o) => o.bucket === (process.env.TRANSFLOW_TMP_BUCKET || ""))
+          .map((o) =>
+            s3.send(new DeleteObjectCommand({ Bucket: o.bucket, Key: o.key }))
+          )
+      );
+    } catch {}
+
     // Update error status in DDB if available
     const tableName = process.env.DYNAMODB_TABLE as string;
     if (ddb && tableName) {
-      const assemblyId = computeAssemblyIdFromObjects(
-        objects,
-        templateId,
-        user
-      );
+      // Assembly ID is already provided from the upload handler
       const errorIso = new Date().toISOString();
       await ddb.send(
         new UpdateCommand({
           TableName: tableName,
           Key: { assembly_id: assemblyId },
           UpdateExpression:
-            "SET error = :err, message = :msg, updated_at = :ua",
+            "SET #error = :err, #message = :msg, #updated = :ua, #progress = :progress",
+          ExpressionAttributeNames: {
+            "#error": "error",
+            "#message": "message",
+            "#updated": "updated_at",
+            "#progress": "progress_pct",
+          },
           ExpressionAttributeValues: {
             ":err": "PROCESSING_ERROR",
             ":msg": (err as Error).message,
             ":ua": errorIso,
+            ":progress": 100,
           },
         })
       );

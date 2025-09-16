@@ -18,9 +18,11 @@ export async function localRun({
   filePath: string;
   outDir?: string;
 }) {
-  const ctxDir = path.isAbsolute(cfg.lambdaBuildContext)
-    ? cfg.lambdaBuildContext
-    : path.resolve(process.cwd(), cfg.lambdaBuildContext);
+  const ctxDir = outDir
+    ? path.isAbsolute(outDir)
+      ? outDir
+      : path.resolve(process.cwd(), outDir)
+    : path.resolve(process.cwd());
   const indexPath = path.join(ctxDir, "templates.index.cjs");
   if (!fs.existsSync(indexPath))
     throw new Error(

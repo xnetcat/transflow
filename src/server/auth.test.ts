@@ -53,11 +53,7 @@ const mockConfig: TransflowConfig = {
     batchSize: 10,
   },
   auth: {
-    requireAuth: true,
-    jwtSecret: "test-secret",
-    jwtIssuer: "test-app.com",
-    userIdClaim: "sub",
-    sessionCookieName: "session",
+    requireAuth: false,
   },
 };
 
@@ -184,62 +180,54 @@ describe("User Context Extraction", () => {
     expect(context).toBeNull();
   });
 
-  it("should extract user context from valid JWT", async () => {
+  it("should not trust header user id when auth disabled (anonymous)", async () => {
+    const configNoAuth = { ...mockConfig, auth: { requireAuth: false } };
     const req = {
-      headers: { authorization: "Bearer valid-token" },
+      headers: { "x-user-id": "header-user-999" },
       cookies: {},
     };
 
-    const context = await extractUserContext(req, mockConfig);
-    expect(context).toEqual({
-      userId: "user-123",
-      permissions: [],
-      metadata: {},
-    });
+    const context = await extractUserContext(req, configNoAuth);
+    expect(context).toBeNull();
   });
 
-  it("should throw AuthenticationError for invalid JWT", async () => {
+  it("returns null in no-auth mode", async () => {
+    const req = { headers: {}, cookies: {} } as any;
+    const context = await extractUserContext(req, mockConfig);
+    expect(context).toBeNull();
+  });
+
+  it("does not validate JWT in no-auth mode", async () => {
     const req = {
       headers: { authorization: "Bearer invalid-token" },
       cookies: {},
-    };
-
-    await expect(extractUserContext(req, mockConfig)).rejects.toThrow(
-      AuthenticationError
-    );
+    } as any;
+    const context = await extractUserContext(req, mockConfig);
+    expect(context).toBeNull();
   });
 
-  it("should throw AuthenticationError for wrong issuer", async () => {
+  it("ignores issuer in no-auth mode", async () => {
     const req = {
       headers: { authorization: "Bearer invalid-issuer" },
       cookies: {},
-    };
-
-    await expect(extractUserContext(req, mockConfig)).rejects.toThrow(
-      AuthenticationError
-    );
-  });
-
-  it("should throw AuthenticationError when no auth provided", async () => {
-    const req = { headers: {}, cookies: {} };
-
-    await expect(extractUserContext(req, mockConfig)).rejects.toThrow(
-      AuthenticationError
-    );
-  });
-
-  it("should handle Bearer token format", async () => {
-    const req = {
-      headers: { authorization: "valid-token" }, // No Bearer prefix
-      cookies: {},
-    };
-
+    } as any;
     const context = await extractUserContext(req, mockConfig);
-    expect(context).toEqual({
-      userId: "user-123",
-      permissions: [],
-      metadata: {},
-    });
+    expect(context).toBeNull();
+  });
+
+  it("returns null when no auth provided (no-auth mode)", async () => {
+    const req = { headers: {}, cookies: {} } as any;
+    const context = await extractUserContext(req, mockConfig);
+    expect(context).toBeNull();
+  });
+
+  it("ignores tokens in no-auth mode", async () => {
+    const req = {
+      headers: { authorization: "valid-token" },
+      cookies: {},
+    } as any;
+    const context = await extractUserContext(req, mockConfig);
+    expect(context).toBeNull();
   });
 });
 

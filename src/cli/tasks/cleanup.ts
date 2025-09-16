@@ -10,6 +10,7 @@ import {
   DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import type { TransflowConfig } from "../../core/types";
+import { computeTmpBucketName } from "../../core/config";
 
 interface CleanupArgs {
   cfg: TransflowConfig;
@@ -37,32 +38,23 @@ export async function cleanup(args: CleanupArgs) {
   if (deleteStorage) {
     console.log("🗑️  Cleaning up S3 objects...");
 
-    if (cfg.s3.mode === "prefix" && cfg.s3.uploadBucket) {
-      const prefix = `uploads/${branch}/`;
-      await cleanupS3Prefix(s3, cfg.s3.uploadBucket, prefix);
-      console.log(`🗑️  Cleaned upload objects for branch ${branch}`);
+    // Clean tmp bucket uploads and outputs
+    const tmpBucket = computeTmpBucketName(cfg.project, cfg.region);
+    try {
+      await cleanupS3Prefix(s3, tmpBucket, `uploads/${branch}/`);
+      await cleanupS3Prefix(s3, tmpBucket, `outputs/${branch}/`);
+      console.log(`🗑️  Cleaned tmp bucket objects for branch ${branch}`);
+    } catch (error) {
+      console.warn(`⚠️  Failed to clean tmp bucket ${tmpBucket}: ${error}`);
     }
 
-    if (cfg.s3.mode === "prefix" && cfg.s3.outputBucket) {
-      const prefix = `outputs/${branch}/`;
-      await cleanupS3Prefix(s3, cfg.s3.outputBucket, prefix);
-      console.log(`🗑️  Cleaned output objects for branch ${branch}`);
-    }
-
-    // For explicit bucket mode, clean up all buckets listed in config
-    if (cfg.s3.buckets) {
-      for (const bucket of cfg.s3.buckets) {
+    // Clean export buckets if configured
+    if (cfg.s3.exportBuckets) {
+      for (const bucket of cfg.s3.exportBuckets) {
         try {
-          const uploadPrefix = `uploads/${branch}/`;
-          const outputPrefix = `outputs/${branch}/`;
-
-          // Clean upload prefix
-          await cleanupS3Prefix(s3, bucket, uploadPrefix);
-          // Clean output prefix
-          await cleanupS3Prefix(s3, bucket, outputPrefix);
-
+          await cleanupS3Prefix(s3, bucket, `outputs/${branch}/`);
           console.log(
-            `🗑️  Cleaned branch ${branch} objects from bucket ${bucket}`
+            `🗑️  Cleaned exported output objects for branch ${branch} in ${bucket}`
           );
         } catch (error) {
           console.warn(`⚠️  Failed to clean bucket ${bucket}: ${error}`);

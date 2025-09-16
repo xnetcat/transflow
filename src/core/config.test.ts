@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
-import { loadConfig, sanitizeBranch } from "./config";
+import { loadConfigObject, sanitizeBranch } from "./config";
 
 describe("config", () => {
   it("loads valid config", async () => {
@@ -9,11 +9,10 @@ describe("config", () => {
     const cfg = {
       project: "myapp",
       region: "us-east-1",
-      s3: { mode: "prefix", uploadBucket: "ub", outputBucket: "ob" },
+      s3: { exportBuckets: ["ub", "ob"] },
       ecrRepo: "repo",
       lambdaPrefix: "lp-",
       templatesDir: "./templates",
-      lambdaBuildContext: "./lambda",
       dynamoDb: {
         tableName: "test-table",
       },
@@ -26,10 +25,10 @@ describe("config", () => {
       },
     };
     fs.writeFileSync(tmp, JSON.stringify(cfg));
-    const loaded = await loadConfig(tmp);
+    const loaded = loadConfigObject(JSON.parse(fs.readFileSync(tmp, "utf8")));
     fs.unlinkSync(tmp);
     expect(loaded.project).toBe("myapp");
-    expect(loaded.s3.mode).toBe("prefix");
+    expect(Array.isArray(loaded.s3.exportBuckets)).toBe(true);
   });
 
   it("sanitizes branch names", () => {

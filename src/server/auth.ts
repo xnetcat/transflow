@@ -1,8 +1,6 @@
 /*
-  Authentication utilities for secure user-based uploads
+  Authentication utilities (no-op in no-auth mode)
 */
-
-import { verify } from "jsonwebtoken";
 import type { TransflowConfig, UserContext } from "../core/types";
 
 export interface AuthRequest {
@@ -28,110 +26,14 @@ export class AuthorizationError extends Error {
  * Extract and validate user context from request
  */
 export async function extractUserContext(
-  req: AuthRequest,
-  cfg: TransflowConfig
+  _req: AuthRequest,
+  _cfg: TransflowConfig
 ): Promise<UserContext | null> {
-  if (!cfg.auth?.requireAuth) {
-    return null; // Authentication not required
-  }
-
-  const userId = await extractUserId(req, cfg);
-  if (!userId) {
-    throw new AuthenticationError("Authentication required");
-  }
-
-  return {
-    userId,
-    permissions: [], // Could be extended to load from database
-    metadata: {},
-  };
-}
-
-/**
- * Extract user ID from JWT token or session
- */
-async function extractUserId(
-  req: AuthRequest,
-  cfg: TransflowConfig
-): Promise<string | null> {
-  // Try JWT from Authorization header first
-  const authHeader = req.headers?.authorization;
-  if (authHeader && typeof authHeader === "string") {
-    const token = authHeader.replace(/^Bearer\s+/, "");
-    const userId = await validateJWT(token, cfg);
-    if (userId) return userId;
-  }
-
-  // Try session cookie
-  const sessionCookieName = cfg.auth?.sessionCookieName || "session";
-  const sessionToken = req.cookies?.[sessionCookieName];
-  if (sessionToken) {
-    const userId = await validateSession(sessionToken, cfg);
-    if (userId) return userId;
-  }
-
+  // No authentication: always anonymous
   return null;
 }
 
-/**
- * Validate JWT token and extract user ID
- */
-async function validateJWT(
-  token: string,
-  cfg: TransflowConfig
-): Promise<string | null> {
-  if (!cfg.auth?.jwtSecret) {
-    throw new Error("JWT secret not configured");
-  }
-
-  try {
-    const decoded = verify(token, cfg.auth.jwtSecret) as any;
-
-    // Validate issuer if configured
-    if (cfg.auth.jwtIssuer && decoded.iss !== cfg.auth.jwtIssuer) {
-      throw new AuthenticationError("Invalid token issuer");
-    }
-
-    // Extract user ID from configured claim
-    const userIdClaim = cfg.auth.userIdClaim || "sub";
-    const userId = decoded[userIdClaim];
-
-    if (!userId || typeof userId !== "string") {
-      throw new AuthenticationError("Invalid user ID in token");
-    }
-
-    return userId;
-  } catch (error) {
-    if (error instanceof AuthenticationError) {
-      throw error;
-    }
-    throw new AuthenticationError("Invalid or expired token");
-  }
-}
-
-/**
- * Validate session token (implement based on your session store)
- */
-async function validateSession(
-  sessionToken: string,
-  cfg: TransflowConfig
-): Promise<string | null> {
-  // This is a placeholder - implement based on your session storage
-  // Common options: Redis, DynamoDB, database, etc.
-
-  // Example for Redis session store:
-  /*
-  const redis = new Redis(cfg.redis.url);
-  const sessionData = await redis.get(`session:${sessionToken}`);
-  if (sessionData) {
-    const session = JSON.parse(sessionData);
-    return session.userId;
-  }
-  */
-
-  console.warn("Session validation not implemented");
-  return null;
-}
+// No auth helpers needed in no-auth mode
 
 /**
  * Generate secure user-specific S3 path
@@ -249,4 +151,3 @@ export function validateFileSize(
 
   return fileSize <= maxFileSize;
 }
-

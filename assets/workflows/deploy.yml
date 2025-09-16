@@ -18,7 +18,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Bake templates
-        run: npx transflow bake --config transflow.config.json
+        run: npx transflow bake --config transflow.config.js
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -26,5 +26,4 @@ jobs:
           role-session-name: transflow-deploy
           aws-region: ${{ secrets.AWS_REGION }}
       - name: Deploy
-        run: npx transflow deploy --branch "${{ github.ref_name }}" --sha "${{ github.sha }}" --config transflow.config.json --yes
-
+        run: npx transflow deploy --branch "${{ github.ref_name }}" --sha "${{ github.sha }}" --config transflow.config.js --yes

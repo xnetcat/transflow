@@ -5,7 +5,6 @@ import type { AssemblyStatus, TemplateDefinition } from "../core/types";
 
 export interface StatusLambdaEvent {
   assemblyId: string;
-  userId?: string; // For authorization
   triggerWebhook?: boolean; // Optional webhook trigger
 }
 
@@ -117,16 +116,6 @@ export const handler = async (
 
     const assembly = result.Item as AssemblyStatus;
 
-    // Authorization check - user can only access their own assemblies
-    if (event.userId && assembly.user?.userId !== event.userId) {
-      return {
-        statusCode: 403,
-        body: JSON.stringify({
-          error: "Access denied: You don't own this assembly",
-        }),
-      };
-    }
-
     // Trigger webhook if requested and configured
     if (event.triggerWebhook && assembly.template_id) {
       try {
@@ -137,11 +126,13 @@ export const handler = async (
           require("path").resolve(__dirname, "../../templates.index.cjs"),
           require("path").resolve(process.cwd(), "templates.index.cjs"),
         ].filter(Boolean) as string[];
+        // Prefer a globally stubbed require in tests
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const reqFunc: any = (globalThis as any).require || require;
         let index: any | undefined;
         for (const candidate of candidates) {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            index = require(candidate);
+            index = reqFunc(candidate);
             break;
           } catch {}
         }
