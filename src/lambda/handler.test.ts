@@ -25,6 +25,7 @@ vi.mock("@aws-sdk/client-s3", () => ({
               setTimeout(() => writeStream.emit("finish"), 10);
               return writeStream;
             }),
+            on: vi.fn(),
           },
         });
       }
@@ -335,5 +336,58 @@ describe("handler", () => {
     await expect(handler(sqsEvent)).rejects.toThrow(
       "Template not found: nonexistent-template"
     );
+  });
+
+
+  it("ignores invalid SQS messages", async () => {
+    const { handler } = await import("./handler");
+
+    const sqsEvent = {
+      Records: [
+        {
+          body: "invalid-json",
+          receiptHandle: "test-receipt-handle-1",
+          messageId: "test-message-id-1",
+        },
+        {
+          body: JSON.stringify({
+            uploadId: "test-upload-valid",
+            templateId: "test-template",
+            objects: [
+               {
+                 bucket: "test-bucket",
+                 key: "uploads/main/test-upload-valid/test-template/file.mp3",
+               }
+            ],
+            branch: "main",
+          }),
+          receiptHandle: "test-receipt-handle-2",
+          messageId: "test-message-id-2",
+        },
+      ],
+    };
+
+    // Should process the valid one and ignore the invalid one (no error thrown)
+    await expect(handler(sqsEvent)).resolves.toBeUndefined();
+  });
+
+  it("ignores invalid S3 keys", async () => {
+    const { handler } = await import("./handler");
+
+    const s3Event = {
+      Records: [
+        {
+          s3: {
+            bucket: { name: "test-bucket" },
+            object: {
+              key: "invalid/key/structure.mp3",
+            },
+          },
+        },
+      ],
+    };
+
+    // Should ignore and return (mock SQS send won't be called if parsing fails to find jobs)
+    await expect(handler(s3Event)).resolves.toBeUndefined();
   });
 });

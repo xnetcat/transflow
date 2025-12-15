@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import Head from "next/head";
+
 const TransflowProvider = dynamic(
   () => import("@xnetcat/transflow/web").then((m) => m.TransflowProvider),
   { ssr: false }
@@ -10,26 +12,15 @@ const Uploader = dynamic(
 );
 import type { AssemblyStatus } from "@xnetcat/transflow";
 
+// --- Components ---
+
 function ProgressBar({ value }: { value: number }) {
   const clamped = Math.max(0, Math.min(100, value));
   return (
-    <div
-      style={{
-        width: "100%",
-        height: 10,
-        background: "rgba(255,255,255,0.25)",
-        borderRadius: 999,
-        overflow: "hidden",
-        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)",
-      }}
-    >
+    <div className="w-full h-2.5 bg-gray-700/50 rounded-full overflow-hidden">
       <div
-        style={{
-          width: `${clamped}%`,
-          height: "100%",
-          background: "linear-gradient(90deg, #a78bfa, #60a5fa)",
-          transition: "width 300ms ease",
-        }}
+        className="h-full bg-gradient-to-r from-indigo-500 to-blue-500 transition-all duration-300 ease-out"
+        style={{ width: `${clamped}%` }}
       />
     </div>
   );
@@ -37,34 +28,73 @@ function ProgressBar({ value }: { value: number }) {
 
 function Card({
   children,
-  tone = "neutral" as "neutral" | "success" | "error",
+  className = "",
+  glow = false,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  glow?: boolean;
 }) {
-  const bg =
-    tone === "success"
-      ? "rgba(16,185,129,0.15)"
-      : tone === "error"
-      ? "rgba(239,68,68,0.15)"
-      : "rgba(255,255,255,0.1)";
-  const border =
-    tone === "success"
-      ? "1px solid rgba(16,185,129,0.35)"
-      : tone === "error"
-      ? "1px solid rgba(239,68,68,0.35)"
-      : "1px solid rgba(255,255,255,0.2)";
   return (
     <div
-      style={{
-        border,
-        background: bg,
-        borderRadius: 16,
-        padding: 16,
-        backdropFilter: "blur(8px)",
-      }}
+      className={`
+        relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl
+        ${glow ? "shadow-[0_0_40px_-10px_rgba(79,70,229,0.15)]" : ""}
+        ${className}
+      `}
     >
       {children}
     </div>
   );
 }
+
+function StatusBadge({ status, error }: { status: string; error?: string }) {
+  if (error) {
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+        Error
+      </span>
+    );
+  }
+  if (status === "ASSEMBLY_COMPLETED") {
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+        Completed
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
+      Processing
+    </span>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number;
+  tone?: "neutral" | "success" | "error";
+}) {
+  const colors = {
+    neutral: "text-gray-200",
+    success: "text-emerald-400",
+    error: "text-red-400",
+  };
+  return (
+    <Card className="flex flex-col items-center justify-center p-4 min-w-[120px]">
+      <div className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1">
+        {label}
+      </div>
+      <div className={`text-3xl font-bold ${colors[tone]}`}>{value}</div>
+    </Card>
+  );
+}
+
+// --- Main Page ---
 
 export default function Home() {
   const [assemblies, setAssemblies] = useState<AssemblyStatus[]>([]);
@@ -142,28 +172,6 @@ export default function Home() {
     return { total, completed, failed };
   }, [assemblies]);
 
-  const headerGradient = {
-    background:
-      "radial-gradient(1200px 600px at 10% -20%, rgba(99,102,241,0.35), transparent), radial-gradient(1200px 600px at 110% 20%, rgba(59,130,246,0.35), transparent), linear-gradient(180deg, #0b1020, #0a0f1c)",
-  } as const;
-
-  const surfaceGradient = {
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03))",
-  } as const;
-
-  const renderStatus = (a: AssemblyStatus) => {
-    if (a.error) return { label: "Error", tone: "error" as const };
-    if (a.ok === "ASSEMBLY_COMPLETED")
-      return { label: "Completed", tone: "success" as const };
-    if (
-      typeof a.upload_progress_pct === "number" &&
-      a.upload_progress_pct < 100
-    )
-      return { label: "Uploading", tone: "neutral" as const };
-    return { label: "Processing", tone: "neutral" as const };
-  };
-
   const progressValue = (a: AssemblyStatus) => {
     if (a.ok === "ASSEMBLY_COMPLETED") return 100;
     if (
@@ -179,274 +187,227 @@ export default function Home() {
     <TransflowProvider
       endpoints={{ action: "/api/create-upload", status: "/api/status" }}
     >
-      <main style={{ minHeight: "100vh", ...headerGradient, color: "#ecf2ff" }}>
-        <div style={{ maxWidth: 1040, margin: "0 auto", padding: 24 }}>
-          <header
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: 24,
-            }}
-          >
-            <div>
-              <h1 style={{ margin: 0, letterSpacing: 0.5 }}>Transflow Demo</h1>
-              <p style={{ margin: 0, opacity: 0.8 }}>
+      <Head>
+        <title>Transflow Demo</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </Head>
+      <main className="min-h-screen bg-neutral-950 text-gray-200 selection:bg-indigo-500/30 pb-20">
+        {/* Background Gradients */}
+        <div className="fixed inset-0 pointer-events-none">
+          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-900/20 rounded-full blur-[120px]" />
+          <div className="absolute top-[20%] right-[-10%] w-[40%] h-[40%] bg-blue-900/10 rounded-full blur-[100px]" />
+        </div>
+
+        <div className="relative max-w-5xl mx-auto px-6 py-12">
+          {/* Header */}
+          <header className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-16">
+            <div className="space-y-2">
+              <h1 className="text-4xl md:text-5xl font-bold tracking-tight bg-gradient-to-br from-white via-gray-200 to-gray-500 bg-clip-text text-transparent">
+                Transflow Demo
+              </h1>
+              <p className="text-lg text-gray-400 font-light max-w-md">
                 Secure uploads, explicit exports, step-based progress
               </p>
             </div>
-            <div style={{ display: "flex", gap: 12 }}>
-              <Card>
-                <div style={{ fontSize: 12, opacity: 0.85 }}>Assemblies</div>
-                <div style={{ fontSize: 18, fontWeight: 600 }}>
-                  {stats.total}
-                </div>
-              </Card>
-              <Card tone="success">
-                <div style={{ fontSize: 12, opacity: 0.85 }}>Completed</div>
-                <div style={{ fontSize: 18, fontWeight: 600 }}>
-                  {stats.completed}
-                </div>
-              </Card>
-              <Card tone="error">
-                <div style={{ fontSize: 12, opacity: 0.85 }}>Errors</div>
-                <div style={{ fontSize: 18, fontWeight: 600 }}>
-                  {stats.failed}
-                </div>
-              </Card>
+
+            <div className="flex gap-4">
+              <StatCard label="Total" value={stats.total} />
+              <StatCard
+                label="Completed"
+                value={stats.completed}
+                tone="success"
+              />
+              <StatCard label="Failed" value={stats.failed} tone="error" />
             </div>
           </header>
 
-          <section
-            style={{
-              ...surfaceGradient,
-              border: "1px solid rgba(255,255,255,0.2)",
-              borderRadius: 16,
-              padding: 20,
-              marginBottom: 24,
-            }}
-          >
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 2fr",
-                gap: 16,
-                alignItems: "center",
-              }}
-            >
-              <div>
-                <label style={{ display: "block", marginBottom: 8 }}>
-                  Template
-                </label>
-                <select
-                  value={templateId}
-                  onChange={(e) => setTemplateId(e.target.value)}
-                  style={{
-                    padding: 10,
-                    borderRadius: 10,
-                    border: "1px solid rgba(255,255,255,0.2)",
-                    background: "rgba(255,255,255,0.05)",
-                    color: "#ecf2ff",
-                    width: "100%",
-                  }}
-                >
-                  <option value="tpl_basic_audio">Basic Audio</option>
-                  <option value="tpl_export_example">Export Example</option>
-                </select>
-              </div>
-              <div>
-                <Uploader
-                  template={templateId}
-                  onUpdate={handleUpdate}
-                  onAssembly={handleAssembly}
-                  onUploadProgress={handleUploadProgress}
-                  multiple={true}
-                />
-                <div style={{ fontSize: 12, opacity: 0.75, marginTop: 8 }}>
-                  Files are uploaded to a temporary bucket; results are written
-                  only to explicitly allowed output buckets by templates.
+          {/* Upload Section */}
+          <section className="mb-12">
+            <Card glow className="p-8">
+              <div className="grid md:grid-cols-3 gap-8">
+                <div className="md:col-span-1 space-y-4">
+                  <label className="block text-sm font-medium text-gray-400 uppercase tracking-wider">
+                    Select Template
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={templateId}
+                      onChange={(e) => setTemplateId(e.target.value)}
+                      className="w-full appearance-none bg-gray-900/50 border border-gray-700 rounded-xl px-4 py-3 text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all hover:bg-gray-800/50"
+                    >
+                      <option value="tpl_basic_audio">Basic Audio</option>
+                      <option value="tpl_export_example">Export Example</option>
+                    </select>
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 9l-7 7-7-7"
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-500 leading-relaxed">
+                    Templates define the processing pipeline. The selected
+                    template determines where files are stored and how they are
+                    processed.
+                  </p>
+                </div>
+
+                <div className="md:col-span-2">
+                  <div className="mb-2 text-sm font-medium text-gray-400 uppercase tracking-wider">
+                    Upload Files
+                  </div>
+                  <Uploader
+                    template={templateId}
+                    onUpdate={handleUpdate}
+                    onAssembly={handleAssembly}
+                    onUploadProgress={handleUploadProgress}
+                    multiple={true}
+                  />
+                  <p className="mt-3 text-xs text-gray-600">
+                    Files are uploaded to a temporary bucket; results are
+                    written only to explicitly allowed output buckets.
+                  </p>
                 </div>
               </div>
-            </div>
+            </Card>
           </section>
 
+          {/* Assemblies Grid */}
           {assemblies.length > 0 && (
-            <section
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 16,
-              }}
-            >
+            <section className="grid md:grid-cols-2 gap-6">
               {assemblies.map((a) => {
-                const status = renderStatus(a);
                 const pct = progressValue(a);
                 const perFiles = fileProgress[a.assembly_id] || [];
+
                 return (
-                  <Card key={a.assembly_id} tone={status.tone}>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        marginBottom: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600 }}>
-                        Assembly {a.assembly_id?.slice(-8)}
-                      </div>
-                      <div style={{ fontSize: 12, opacity: 0.85 }}>
-                        {status.label}
-                      </div>
-                    </div>
-                    <div style={{ marginBottom: 8 }}>
-                      <ProgressBar value={pct} />
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        fontSize: 12,
-                        opacity: 0.85,
-                        marginBottom: 8,
-                      }}
-                    >
+                  <Card
+                    key={a.assembly_id}
+                    className="transition-all hover:bg-white/[0.07] group"
+                  >
+                    {/* Card Header */}
+                    <div className="flex justify-between items-start mb-4">
                       <div>
-                        {typeof a.upload_progress_pct === "number" &&
-                        a.upload_progress_pct < 100
-                          ? `Uploading ${a.upload_progress_pct}%`
-                          : a.current_step && a.steps_total
-                          ? `Step ${a.current_step}/${a.steps_total}${
-                              a.current_step_name
-                                ? ` • ${a.current_step_name}`
-                                : ""
-                            }`
-                          : a.message || "Pending"}
+                        <div className="font-mono text-xs text-gray-500 mb-1">
+                          ID: {a.assembly_id?.slice(-8)}
+                        </div>
+                        <div
+                          className="font-medium text-gray-200 truncate max-w-[200px]"
+                          title={a.assembly_id}
+                        >
+                          {a.uploads?.[0]?.name || "New Assembly"}
+                          {a.uploads && a.uploads.length > 1 && (
+                            <span className="text-gray-500 ml-2">
+                              +{a.uploads.length - 1} more
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div>{pct}%</div>
+                      <StatusBadge status={a.ok || ""} error={a.error} />
                     </div>
 
-                    {perFiles.length > 0 && (
-                      <div style={{ marginBottom: 8 }}>
-                        <div
-                          style={{
-                            fontSize: 12,
-                            opacity: 0.85,
-                            marginBottom: 6,
-                          }}
-                        >
-                          Upload progress
-                        </div>
-                        <ul
-                          style={{
-                            listStyle: "none",
-                            padding: 0,
-                            margin: 0,
-                            display: "grid",
-                            gap: 6,
-                          }}
-                        >
+                    {/* Progress */}
+                    <div className="mb-4">
+                      <div className="flex justify-between text-xs text-gray-400 mb-2">
+                        <span>
+                          {typeof a.upload_progress_pct === "number" &&
+                          a.upload_progress_pct < 100
+                            ? "Uploading to S3..."
+                            : a.current_step && a.steps_total
+                            ? `Step ${a.current_step} of ${a.steps_total}: ${
+                                a.current_step_name || "Processing"
+                              }`
+                            : a.message || "Pending..."}
+                        </span>
+                        <span>{pct}%</span>
+                      </div>
+                      <ProgressBar value={pct} />
+                    </div>
+
+                    {/* File Upload Progress Detail */}
+                    {perFiles.length > 0 &&
+                      typeof a.upload_progress_pct === "number" &&
+                      a.upload_progress_pct < 100 && (
+                        <div className="mt-4 space-y-2 border-t border-white/5 pt-4">
                           {perFiles.map((f, i) => (
-                            <li key={i}>
-                              <div
-                                style={{
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  fontSize: 12,
-                                  opacity: 0.85,
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    marginRight: 8,
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                    maxWidth: 340,
-                                  }}
-                                >
+                            <div key={i} className="text-xs">
+                              <div className="flex justify-between text-gray-500 mb-1">
+                                <span className="truncate max-w-[150px]">
                                   {f.name}
                                 </span>
                                 <span>{f.pct}%</span>
                               </div>
-                              <ProgressBar value={f.pct} />
-                            </li>
+                              <div className="w-full h-1 bg-gray-800 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-indigo-500/50"
+                                  style={{ width: `${f.pct}%` }}
+                                />
+                              </div>
+                            </div>
                           ))}
-                        </ul>
+                        </div>
+                      )}
+
+                    {/* Error Display */}
+                    {a.error && (
+                      <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-300">
+                        {a.error}
                       </div>
                     )}
 
-                    {a.uploads && a.uploads.length > 0 && (
-                      <details style={{ marginBottom: 8 }}>
-                        <summary style={{ cursor: "pointer" }}>
-                          Uploads ({a.uploads.length})
-                        </summary>
-                        <ul style={{ marginTop: 6, paddingLeft: 20 }}>
-                          {a.uploads.map((u, i) => (
-                            <li key={i}>
-                              <strong>{u.name}</strong>
-                              {typeof u.size === "number" && (
-                                <span style={{ opacity: 0.75 }}>
-                                  {" "}
-                                  {(u.size / 1024).toFixed(1)} KB
-                                </span>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-
+                    {/* Results */}
                     {a.results && Object.keys(a.results).length > 0 && (
-                      <details style={{ marginBottom: 8 }}>
-                        <summary style={{ cursor: "pointer" }}>Results</summary>
-                        <div style={{ marginTop: 6 }}>
+                      <div className="mt-4 pt-4 border-t border-white/5">
+                        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                          Outputs
+                        </div>
+                        <div className="space-y-3">
                           {Object.entries(a.results).map(
                             ([stepName, results]) => (
-                              <div key={stepName} style={{ marginBottom: 6 }}>
-                                <strong>{stepName}</strong>
-                                <ul style={{ paddingLeft: 20, marginTop: 4 }}>
+                              <div key={stepName}>
+                                <div className="text-xs text-indigo-400 mb-1 font-mono">
+                                  {stepName}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
                                   {(results as any[]).map((r, i) => (
-                                    <li key={i}>
-                                      {r.ssl_url ? (
-                                        <a
-                                          href={r.ssl_url}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                        >
-                                          {r.name}
-                                        </a>
-                                      ) : (
-                                        r.name
-                                      )}
-                                      {typeof r.size === "number" && (
-                                        <span style={{ opacity: 0.75 }}>
-                                          {" "}
-                                          {(r.size / 1024).toFixed(1)} KB
-                                        </span>
-                                      )}
-                                    </li>
+                                    <a
+                                      key={i}
+                                      href={r.ssl_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-xs text-gray-300 transition-colors group/link"
+                                    >
+                                      <span className="truncate max-w-[120px]">
+                                        {r.name}
+                                      </span>
+                                      <svg
+                                        className="w-3 h-3 ml-2 opacity-0 group-hover/link:opacity-100 transition-opacity"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                      >
+                                        <path
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          strokeWidth={2}
+                                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                                        />
+                                      </svg>
+                                    </a>
                                   ))}
-                                </ul>
+                                </div>
                               </div>
                             )
                           )}
                         </div>
-                      </details>
-                    )}
-
-                    {a.error && (
-                      <div
-                        style={{
-                          background: "rgba(239,68,68,0.15)",
-                          border: "1px solid rgba(239,68,68,0.35)",
-                          color: "#fecaca",
-                          borderRadius: 8,
-                          padding: 8,
-                          marginTop: 8,
-                        }}
-                      >
-                        <strong>Error:</strong> {a.error}
                       </div>
                     )}
                   </Card>
@@ -455,25 +416,21 @@ export default function Home() {
             </section>
           )}
 
+          {/* Debug Data */}
           {assemblies.length > 0 && (
-            <section style={{ marginTop: 24 }}>
-              <details>
-                <summary style={{ cursor: "pointer" }}>
-                  Raw Data (debug)
-                </summary>
-                <pre
-                  style={{
-                    background: "#0b1226",
-                    padding: 16,
-                    borderRadius: 12,
-                    overflow: "auto",
-                    border: "1px solid rgba(255,255,255,0.15)",
-                  }}
-                >
+            <details className="mt-12 group">
+              <summary className="cursor-pointer text-xs text-gray-600 hover:text-gray-400 transition-colors list-none">
+                <span className="group-open:hidden">Show Debug Data</span>
+                <span className="hidden group-open:inline">
+                  Hide Debug Data
+                </span>
+              </summary>
+              <div className="mt-4 p-4 rounded-xl bg-black/50 border border-white/5 overflow-x-auto">
+                <pre className="text-xs text-gray-500 font-mono">
                   {JSON.stringify(assemblies, null, 2)}
                 </pre>
-              </details>
-            </section>
+              </div>
+            </details>
           )}
         </div>
       </main>

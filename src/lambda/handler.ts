@@ -60,7 +60,8 @@ import type {
 function loadTemplatesIndex(): any {
   // Prefer a globally stubbed require in tests, fall back to module require
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const reqFunc: any = (globalThis as any).require || require;
+  const globalReq = (globalThis as any).require;
+  const reqFunc = typeof globalReq === "function" ? globalReq : require;
   const candidates = [
     process.env.TEMPLATES_INDEX_PATH,
     "/var/task/templates.index.cjs",
@@ -157,11 +158,25 @@ async function sendWebhookWithRetries(
 }
 
 function isS3Event(event: UnifiedEvent): event is S3EventLike {
-  return !!(event.Records?.[0] as any)?.s3;
+  if (
+    "Records" in event &&
+    Array.isArray(event.Records) &&
+    event.Records.length > 0
+  ) {
+    return "s3" in event.Records[0];
+  }
+  return false;
 }
 
 function isSQSEvent(event: UnifiedEvent): event is SQSEventLike {
-  return !!(event.Records?.[0] as any)?.body;
+  if (
+    "Records" in event &&
+    Array.isArray(event.Records) &&
+    event.Records.length > 0
+  ) {
+    return "body" in event.Records[0];
+  }
+  return false;
 }
 
 async function parseSQSJobs(event: SQSEventLike): Promise<ProcessingJob[]> {
@@ -339,15 +354,23 @@ async function processJob(
         new GetObjectCommand({ Bucket: obj.bucket, Key: obj.key })
       );
 
-      const stream: any = s3Obj.Body as any;
+      const stream = s3Obj.Body;
       await new Promise<void>((resolve, reject) => {
         const w = fs.createWriteStream(p);
         w.on("finish", () => resolve());
         w.on("error", reject);
-        if (stream && typeof stream.pipe === "function") {
-          stream.on?.("error", reject);
-          stream.pipe(w);
-        } else if (stream && typeof stream.getReader === "function") {
+
+        // Node.js Readable stream
+        if (stream && "pipe" in stream && typeof stream.pipe === "function") {
+          const readable = stream as import("stream").Readable;
+          readable.on("error", reject);
+          readable.pipe(w);
+        } else if (
+          stream &&
+          "getReader" in stream &&
+          typeof stream.getReader === "function"
+        ) {
+          // Web ReadableStream fallback
           // Web ReadableStream fallback
           const reader = stream.getReader();
           const pump = () =>
@@ -477,7 +500,7 @@ async function processJob(
         generateKey: (basename) => `${outputPrefix}${basename}`,
         publish: async (message) => {
           // No-op: SSE removed, status tracked via DynamoDB
-          console.log("Template publish call (no-op):", message);
+          // console.debug("Template publish call (no-op):", message);
         },
       },
     };

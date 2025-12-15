@@ -45,9 +45,7 @@ export function Uploader({
       xhr.upload.onprogress = (evt) => {
         if (!evt.lengthComputable) return;
         const pct = Math.floor((evt.loaded / evt.total) * 100);
-        try {
-          onProgress?.(pct);
-        } catch {}
+        onProgress?.(pct);
       };
       xhr.onload = () => {
         const status = xhr.status;
@@ -120,7 +118,7 @@ export function Uploader({
           contentType: file.type,
           template,
           fields,
-        } as any;
+        };
 
         const response = await fetch(actionUrl, {
           method: "POST",
@@ -141,25 +139,21 @@ export function Uploader({
 
         // Upload to S3
         // initial 0%
-        try {
-          onUploadProgress?.(assembly_id, {
-            fileName: file.name,
-            index: 0,
-            pct: 0,
-          });
-        } catch {}
+        onUploadProgress?.(assembly_id, {
+          fileName: file.name,
+          index: 0,
+          pct: 0,
+        });
         const uploadResponse = await putWithProgress(
           presigned_url,
           file,
           file.type,
           (pct) => {
-            try {
-              onUploadProgress?.(assembly_id, {
-                fileName: file.name,
-                index: 0,
-                pct,
-              });
-            } catch {}
+            onUploadProgress?.(assembly_id, {
+              fileName: file.name,
+              index: 0,
+              pct,
+            });
           }
         );
 
@@ -168,13 +162,11 @@ export function Uploader({
         }
 
         // Ensure 100% and start polling for status immediately
-        try {
-          onUploadProgress?.(assembly_id, {
-            fileName: file.name,
-            index: 0,
-            pct: 100,
-          });
-        } catch {}
+        onUploadProgress?.(assembly_id, {
+          fileName: file.name,
+          index: 0,
+          pct: 100,
+        });
         startPollingStatus(assembly_id, onUpdate);
       } else {
         // Batch upload
@@ -188,7 +180,7 @@ export function Uploader({
           template,
           files: fileDetails,
           fields,
-        } as any;
+        };
 
         const response = await fetch(actionUrl, {
           method: "POST",
@@ -214,25 +206,21 @@ export function Uploader({
             if (!uploadFile) return;
 
             // initial 0%
-            try {
-              onUploadProgress?.(assembly_id, {
-                fileName: file.name,
-                index,
-                pct: 0,
-              });
-            } catch {}
+            onUploadProgress?.(assembly_id, {
+              fileName: file.name,
+              index,
+              pct: 0,
+            });
             const uploadResponse = await putWithProgress(
               uploadFile.presigned_url,
               file,
               file.type,
               (pct) => {
-                try {
-                  onUploadProgress?.(assembly_id, {
-                    fileName: file.name,
-                    index,
-                    pct,
-                  });
-                } catch {}
+                onUploadProgress?.(assembly_id, {
+                  fileName: file.name,
+                  index,
+                  pct,
+                });
               }
             );
 
@@ -241,13 +229,11 @@ export function Uploader({
                 `S3 upload failed for ${file.name}: ${uploadResponse.status}`
               );
             }
-            try {
-              onUploadProgress?.(assembly_id, {
-                fileName: file.name,
-                index,
-                pct: 100,
-              });
-            } catch {}
+            onUploadProgress?.(assembly_id, {
+              fileName: file.name,
+              index,
+              pct: 100,
+            });
           })
         );
 
@@ -264,33 +250,58 @@ export function Uploader({
   }
 
   return (
-    <div
-      style={{
-        border: "1px dashed #ccc",
-        padding: "20px",
-        textAlign: "center",
-      }}
-    >
-      <input
-        type="file"
-        multiple={multiple}
-        onChange={(e) => {
-          if (e.target.files && e.target.files.length > 0) {
-            uploadFiles(e.target.files);
-          }
-        }}
-        disabled={busy}
-        style={{ marginBottom: "10px" }}
-      />
-      <div>
-        {busy && <p>Uploading...</p>}
-        {error && <p style={{ color: "red" }}>Error: {error}</p>}
-        {!busy && !error && (
-          <p>
-            {multiple ? "Select files" : "Select a file"} to upload
-            {template && ` (Template: ${template})`}
-          </p>
-        )}
+    <div className="relative group">
+      <div
+        className={`
+          relative border-2 border-dashed border-gray-700 bg-gray-900/50 rounded-xl p-8 
+          text-center transition-all duration-200 ease-in-out
+          hover:border-indigo-500/50 hover:bg-gray-800/80
+          ${busy ? "opacity-50 cursor-wait" : "cursor-pointer"}
+        `}
+      >
+        <input
+          type="file"
+          multiple={multiple}
+          onChange={(e) => {
+            if (e.target.files && e.target.files.length > 0) {
+              uploadFiles(e.target.files);
+            }
+          }}
+          disabled={busy}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+        />
+        <div className="flex flex-col items-center justify-center gap-3">
+          <div className="p-3 bg-indigo-500/10 rounded-full text-indigo-400 group-hover:bg-indigo-500/20 transition-colors">
+            <svg
+              className="w-6 h-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+              />
+            </svg>
+          </div>
+          <div className="space-y-1">
+            <p className="font-medium text-gray-200">
+              {busy
+                ? "Uploading files..."
+                : multiple
+                ? "Drop files here or click to upload"
+                : "Drop a file here or click to upload"}
+            </p>
+            {template && (
+              <p className="text-xs text-gray-500 font-mono">
+                Template: {template}
+              </p>
+            )}
+            {error && <p className="text-sm text-red-400">{error}</p>}
+          </div>
+        </div>
       </div>
     </div>
   );

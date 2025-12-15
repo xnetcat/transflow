@@ -95,6 +95,9 @@ export default createStatusHandler(cfg as any);
 ```tsx
 import { TransflowProvider, Uploader } from "@xnetcat/transflow/web";
 
+// Note: The Uploader component uses Tailwind CSS for styling.
+// Ensure your project is configured with Tailwind CSS or the styles may not appear correctly.
+
 <TransflowProvider
   endpoints={{ action: "/api/create-upload", status: "/api/status" }}
 >
