@@ -7,7 +7,7 @@ on:
     branches: ["**"]
 
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,5 +32,72 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Test
+      - name: Unit tests
         run: bun run test
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: unit
+    services:
+      localstack:
+        image: localstack/localstack:3
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3,sqs,dynamodb,iam,sts
+          DEBUG: "0"
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health | grep -q '\"s3\"'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install ffmpeg (worker dependency)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Install example dependencies
+        working-directory: examples/next-app
+        run: bun install --frozen-lockfile
+
+      - name: Generate test mp3
+        run: |
+          mkdir -p /tmp/transflow-e2e
+          ffmpeg -y -f lavfi -i "sine=frequency=440:duration=5" \
+            -c:a libmp3lame -b:a 64k /tmp/transflow-e2e/test.mp3
+
+      - name: Bake templates
+        working-directory: examples/next-app
+        run: node ../../dist/cli/index.js bake --config transflow.config.js --out .transflow-build
+
+      - name: Provision LocalStack resources
+        working-directory: examples/next-app
+        env:
+          TRANSFLOW_AWS_ENDPOINT: http://localhost:4566
+        run: node ../../dist/cli/index.js local:start --config transflow.config.js
+
+      - name: Run e2e suite
+        working-directory: examples/next-app
+        env:
+          TRANSFLOW_AWS_ENDPOINT: http://localhost:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: eu-north-1
+        run: node scripts/e2e-suite.mjs

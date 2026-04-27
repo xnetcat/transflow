@@ -13,17 +13,41 @@ Serverless file processing pipelines on AWS — S3 + SQS + Lambda + DynamoDB —
 
 ## Architecture
 
+Two flows depending on `sqs.fifo`:
+
+**Default (`sqs.fifo: true`)** — S3 → Lambda bridge → FIFO SQS → Lambda processor.
+Provides ContentBasedDeduplication so duplicate S3 events don't double-process,
+at the cost of one extra Lambda invocation per upload.
+
 ```mermaid
 flowchart TD
   A[Browser Uploader] -->|POST /api/create-upload| B(createUploadHandler)
   B -->|presigned PUT + assembly_id| A
   A -->|PUT file| C[(S3 tmp bucket\nuploads/{branch}/{assemblyId}/...)]
-  C -->|s3:ObjectCreated| D{Lambda or local:worker}
-  D -->|enqueue| E[[SQS]]
-  E --> D
-  D -->|download → run template steps → export| H[(S3 export buckets)]
-  D -->|UpdateItem| G[(DynamoDB)]
-  D -->|optional POST signed| I[(Webhook)]
+  C -->|s3:ObjectCreated| D{Lambda bridge}
+  D -->|SendMessage| E[[FIFO SQS]]
+  E --> F{Lambda processor}
+  F -->|run template steps → export| H[(S3 export buckets)]
+  F -->|UpdateItem| G[(DynamoDB)]
+  F -->|HMAC-signed POST| I[(Webhook)]
+  A -->|GET /api/status| J(createStatusHandler)
+  J --> G
+```
+
+**Standard SQS (`sqs.fifo: false`, recommended for cost)** — S3 → SQS direct →
+Lambda processor. One fewer Lambda invocation per upload; the handler merges
+events that share an `assembly_id` so we don't race on DynamoDB.
+
+```mermaid
+flowchart TD
+  A[Browser Uploader] -->|POST /api/create-upload| B(createUploadHandler)
+  B -->|presigned PUT + assembly_id| A
+  A -->|PUT file| C[(S3 tmp bucket)]
+  C -->|s3:ObjectCreated| E[[Standard SQS]]
+  E --> F{Lambda processor\nor local:worker}
+  F -->|run template steps → export| H[(S3 export buckets)]
+  F -->|UpdateItem| G[(DynamoDB)]
+  F -->|HMAC-signed POST| I[(Webhook)]
   A -->|GET /api/status| J(createStatusHandler)
   J --> G
 ```

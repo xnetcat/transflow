@@ -101,12 +101,6 @@ export interface StepContextUtils {
   publish: (message: Record<string, unknown>) => Promise<void>;
 }
 
-export interface UserContext {
-  userId: string;
-  permissions?: string[];
-  metadata?: Record<string, unknown>;
-}
-
 export interface StepContext {
   uploadId: string;
   input: { bucket: string; key: string; contentType?: string };
@@ -119,7 +113,6 @@ export interface StepContext {
   utils: StepContextUtils;
   tmpDir: string;
   fields?: Record<string, string>;
-  user?: UserContext;
 }
 
 export interface TemplateStep {
@@ -223,7 +216,6 @@ export interface AssemblyStatus {
   project?: string;
   branch?: string;
   template_id?: string;
-  user?: { userId: string };
   updated_at?: string;
   created_at?: string;
   /** Epoch seconds when DynamoDB will expire this record. */
