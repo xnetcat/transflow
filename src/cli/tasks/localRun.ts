@@ -74,6 +74,8 @@ export async function localRun({
     uploadId,
     input: { bucket: "local", key: inputLocalPath },
     inputLocalPath,
+    inputs: [{ bucket: "local", key: inputLocalPath }],
+    inputsLocalPaths: [inputLocalPath],
     output: { bucket: outputBucket, prefix: outputsPrefix },
     branch,
     awsRegion: cfg.region,
@@ -88,6 +90,14 @@ export async function localRun({
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.copyFileSync(local, dest);
         return { bucket: outputBucket, key: `${outputsPrefix}${key}` };
+      },
+      exportToBucket: async (local, key, bucketName, _ct) => {
+        const dest = path
+          .join(effectiveOutDir, outputsPrefix, key)
+          .replace(/\\/g, "/");
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(local, dest);
+        return { bucket: bucketName, key: `${outputsPrefix}${key}` };
       },
       generateKey: (basename) => `${outputsPrefix}${basename}`,
       publish: async (message) => {

@@ -72,9 +72,9 @@ export async function bakeTemplates(params: {
     main: "dist/lambda/handler.js",
     dependencies: {
       "@aws-sdk/client-s3": "^3.645.0",
+      "@aws-sdk/client-sqs": "^3.645.0",
       "@aws-sdk/client-dynamodb": "^3.645.0",
       "@aws-sdk/lib-dynamodb": "^3.645.0",
-      ioredis: "^5.4.1",
     },
   } as const;
   fs.writeFileSync(
@@ -113,7 +113,7 @@ export async function bakeTemplates(params: {
       format: "cjs",
       sourcemap: false,
       logLevel: "silent",
-      external: ["ioredis", "@aws-sdk/*"],
+      external: ["@aws-sdk/*"],
     });
   }
 

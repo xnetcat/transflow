@@ -12,7 +12,6 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
   PutCommand,
@@ -20,7 +19,21 @@ import {
   GetCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { spawn } from "child_process";
-import { createHash, randomUUID, createHmac } from "crypto";
+import { createHash, randomUUID } from "crypto";
+import {
+  makeS3Client,
+  makeSqsClient,
+  makeDynamoDocClient,
+  buildS3PublicUrl,
+  resolveEndpoint,
+  resolveRegion,
+} from "../core/awsClients";
+import { sendWebhookWithRetries } from "../core/webhook";
+import type {
+  TemplateDefinition,
+  StepContext,
+  AssemblyStatus,
+} from "../core/types";
 
 type S3EventLike = {
   Records: Array<{
@@ -51,21 +64,13 @@ type ProcessingJob = {
 
 type UnifiedEvent = S3EventLike | SQSEventLike;
 
-import type {
-  TemplateDefinition,
-  StepContext,
-  AssemblyStatus,
-} from "../core/types";
-
 function loadTemplatesIndex(): any {
-  // Prefer a globally stubbed require in tests, fall back to module require
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const globalReq = (globalThis as any).require;
   const reqFunc = typeof globalReq === "function" ? globalReq : require;
   const candidates = [
     process.env.TEMPLATES_INDEX_PATH,
     "/var/task/templates.index.cjs",
-    // Fallbacks for local/dev environments
     path.resolve(__dirname, "../../templates.index.cjs"),
     path.resolve(process.cwd(), "templates.index.cjs"),
   ].filter(Boolean) as string[];
@@ -74,87 +79,10 @@ function loadTemplatesIndex(): any {
     try {
       return reqFunc(candidate);
     } catch (_) {
-      // try next candidate
+      // try next
     }
   }
   throw new Error("Templates index not found");
-}
-
-function getSQS() {
-  const region =
-    process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
-  return new SQSClient({ region });
-}
-
-function computeAssemblyIdFromObjects(
-  objects: S3Object[],
-  templateId: string
-): string {
-  // Temporary computation based on keys + template (will be MD5-based later)
-  const objectKeys = objects
-    .map((obj) => obj.key)
-    .sort()
-    .join(",");
-  const input = `${objectKeys}:${templateId}`;
-  return createHash("sha256").update(input).digest("hex");
-}
-
-async function sendWebhookWithRetries(
-  webhookUrl: string,
-  payload: any,
-  secret?: string,
-  maxRetries = 3
-): Promise<void> {
-  const body = JSON.stringify(payload ?? {});
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "User-Agent": "Transflow/1.0",
-  };
-
-  // Add HMAC signature if secret provided
-  if (secret) {
-    const signature = createHmac("sha256", secret).update(body).digest("hex");
-    headers["X-Transflow-Signature"] = `sha256=${signature}`;
-  }
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await fetch(webhookUrl, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(30000), // 30s timeout
-      });
-
-      if (response.ok) {
-        console.log(`Webhook sent successfully to ${webhookUrl}`);
-        return;
-      }
-
-      if (response.status >= 400 && response.status < 500) {
-        // Client error - don't retry
-        throw new Error(
-          `Webhook failed with client error: ${response.status} ${response.statusText}`
-        );
-      }
-
-      // Server error - will retry
-      throw new Error(
-        `Webhook failed with server error: ${response.status} ${response.statusText}`
-      );
-    } catch (error) {
-      console.error(`Webhook attempt ${attempt + 1} failed:`, error);
-
-      if (attempt === maxRetries) {
-        throw error; // Final attempt failed
-      }
-
-      // Exponential backoff: 1s, 2s, 4s
-      const delay = Math.pow(2, attempt) * 1000;
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
 }
 
 function isS3Event(event: UnifiedEvent): event is S3EventLike {
@@ -179,19 +107,37 @@ function isSQSEvent(event: UnifiedEvent): event is SQSEventLike {
   return false;
 }
 
-async function parseSQSJobs(event: SQSEventLike): Promise<ProcessingJob[]> {
+async function parseSQSJobs(
+  event: SQSEventLike,
+  s3: S3Client
+): Promise<ProcessingJob[]> {
   const jobs: ProcessingJob[] = [];
-
   for (const record of event.Records) {
     try {
-      const job = JSON.parse(record.body) as ProcessingJob;
-      jobs.push(job);
+      const parsed = JSON.parse(record.body) as
+        | ProcessingJob
+        | S3EventLike
+        | { Event?: string };
+      // S3 → SQS direct integrations deliver the standard S3 event payload.
+      // Bridge-style enqueues deliver a pre-parsed ProcessingJob.
+      if (
+        parsed &&
+        Array.isArray((parsed as S3EventLike).Records) &&
+        (parsed as S3EventLike).Records[0] &&
+        "s3" in (parsed as S3EventLike).Records[0]
+      ) {
+        const expanded = await parseS3Jobs(parsed as S3EventLike, s3);
+        jobs.push(...expanded);
+      } else if ((parsed as { Event?: string }).Event === "s3:TestEvent") {
+        // S3 sends a TestEvent when the notification is first wired up.
+        continue;
+      } else {
+        jobs.push(parsed as ProcessingJob);
+      }
     } catch (error) {
       console.error(`Failed to parse SQS message ${record.messageId}:`, error);
-      // Continue processing other messages
     }
   }
-
   return jobs;
 }
 
@@ -213,7 +159,6 @@ async function parseS3Jobs(
     const bucket = record.s3.bucket.name;
     const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, " "));
 
-    // New key structure: uploads/{branch}/{assemblyId}/{filename}
     const m = key.match(/^uploads\/([^/]+)\/([^/]+)\//);
     if (!m) {
       console.warn(`Key does not match expected layout: ${key}`);
@@ -221,7 +166,6 @@ async function parseS3Jobs(
     }
     const [, branch, assemblyId] = m;
 
-    // Get metadata from S3 object to extract templateId and uploadId
     try {
       const head = await s3.send(
         new HeadObjectCommand({ Bucket: bucket, Key: key })
@@ -241,7 +185,6 @@ async function parseS3Jobs(
     }
   }
 
-  // Group by assemblyId (not uploadId:templateId anymore)
   const groups = new Map<string, Expanded[]>();
   for (const rec of expanded) {
     const list = groups.get(rec.assemblyId) || ([] as Expanded[]);
@@ -298,6 +241,12 @@ async function execProbe(
   });
 }
 
+function computeTtl(): number | undefined {
+  const days = Number(process.env.TRANSFLOW_TTL_DAYS || 30);
+  if (!Number.isFinite(days) || days <= 0) return undefined;
+  return Math.floor(Date.now() / 1000) + days * 86400;
+}
+
 async function processJob(
   job: ProcessingJob,
   s3: S3Client,
@@ -305,11 +254,9 @@ async function processJob(
   ddb?: DynamoDBDocumentClient
 ) {
   const { assemblyId, uploadId, templateId, objects, branch } = job;
-  // Predeclare hash collections for use in success and error paths
   const md5Hashes: string[] = [];
   const etagHashes: string[] = [];
 
-  // Enforce buckets: inputs must be in allowed list and in tmp bucket
   const allowedBucketsEnv = process.env.TRANSFLOW_ALLOWED_BUCKETS || "[]";
   const allowedBuckets = JSON.parse(allowedBucketsEnv) as string[];
   const tmpBucket = process.env.TRANSFLOW_TMP_BUCKET || allowedBuckets[0];
@@ -321,7 +268,6 @@ async function processJob(
   }
 
   try {
-    // Load baked template (path-agnostic: env → /var/task → fallbacks)
     const index = loadTemplatesIndex();
     const mod = index[templateId];
     if (!mod || !mod.default)
@@ -329,21 +275,17 @@ async function processJob(
     const tpl: TemplateDefinition = mod.default;
 
     const tmpDir = fs.mkdtempSync(path.join("/tmp", `transflow-`));
-    // Output bucket must be explicitly set in template, otherwise use tmp/input bucket
     const outputBucket = tpl.outputBucket || objects[0].bucket;
     const outputPrefix = `outputs/${branch}/${uploadId}/${templateId}/`;
 
-    // Download all inputs, compute MD5, and build uploads[] for status
     const inputsLocalPaths: string[] = [];
     const inputs: Array<{ bucket: string; key: string; contentType?: string }> =
       [];
     const uploads: AssemblyStatus["uploads"] = [];
     let bytesExpected = 0;
-    // md5Hashes declared above for error-path reuse
 
     for (const obj of objects) {
       const p = path.join(tmpDir, path.basename(obj.key));
-      // Get content info
       const head = await s3.send(
         new HeadObjectCommand({ Bucket: obj.bucket, Key: obj.key })
       );
@@ -360,7 +302,6 @@ async function processJob(
         w.on("finish", () => resolve());
         w.on("error", reject);
 
-        // Node.js Readable stream
         if (stream && "pipe" in stream && typeof stream.pipe === "function") {
           const readable = stream as import("stream").Readable;
           readable.on("error", reject);
@@ -370,8 +311,6 @@ async function processJob(
           "getReader" in stream &&
           typeof stream.getReader === "function"
         ) {
-          // Web ReadableStream fallback
-          // Web ReadableStream fallback
           const reader = stream.getReader();
           const pump = () =>
             reader
@@ -403,12 +342,10 @@ async function processJob(
         contentType: head.ContentType,
       });
 
-      // Build upload entry for status
       const size = head.ContentLength || 0;
       const filename = path.basename(obj.key);
       const ext = path.extname(filename).slice(1);
       const basename = path.basename(filename, path.extname(filename));
-      const md5hash = computedMd5;
 
       uploads!.push({
         id: `upload_${randomUUID()}`,
@@ -418,14 +355,14 @@ async function processJob(
         size,
         mime: head.ContentType,
         field: "file",
-        md5hash,
+        md5hash: computedMd5,
       });
 
       bytesExpected += size;
     }
 
-    const region =
-      process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
+    const region = resolveRegion();
+    const endpoint = resolveEndpoint();
     const ctx: StepContext & {
       currentStepName?: string;
       stepResults?: Record<string, any[]>;
@@ -456,13 +393,29 @@ async function processJob(
               ContentType: contentType,
             })
           );
+
+          const stepName = ctx.currentStepName || "default";
+          const resultEntry = {
+            id: `result_${randomUUID()}`,
+            name: path.basename(key),
+            basename: path.basename(key, path.extname(key)),
+            ext: path.extname(key).slice(1),
+            size: body.length,
+            mime: contentType,
+            field: "file",
+            original_id: uploads?.[0]?.id,
+            ssl_url: buildS3PublicUrl(bucketName, outKey, region, endpoint),
+          };
+          if (!ctx.stepResults) ctx.stepResults = {};
+          if (!ctx.stepResults[stepName]) ctx.stepResults[stepName] = [];
+          ctx.stepResults[stepName].push(resultEntry);
+
           return { bucket: bucketName, key: outKey };
         },
         uploadResult: async (localPath, destKey, contentType) => {
           const body = fs.readFileSync(localPath);
           const outKey = `${outputPrefix}${destKey}`.replace(/\\/g, "/");
 
-          // Enforce allowed buckets for outputs (allow tmp bucket as well)
           if (!new Set([tmpBucket, ...allowedBuckets]).has(outputBucket)) {
             throw new Error(`Output bucket not allowed: ${outputBucket}`);
           }
@@ -476,7 +429,6 @@ async function processJob(
             })
           );
 
-          // Track result for current step (we'll use the step context when available)
           const stepName = ctx.currentStepName || "default";
           const resultEntry = {
             id: `result_${randomUUID()}`,
@@ -487,10 +439,9 @@ async function processJob(
             mime: contentType,
             field: "file",
             original_id: uploads?.[0]?.id,
-            ssl_url: `https://${outputBucket}.s3.${region}.amazonaws.com/${outKey}`,
+            ssl_url: buildS3PublicUrl(outputBucket, outKey, region, endpoint),
           };
 
-          // Add to results tracking (we'll update DDB later)
           if (!ctx.stepResults) ctx.stepResults = {};
           if (!ctx.stepResults[stepName]) ctx.stepResults[stepName] = [];
           ctx.stepResults[stepName].push(resultEntry);
@@ -498,25 +449,24 @@ async function processJob(
           return { bucket: outputBucket, key: outKey };
         },
         generateKey: (basename) => `${outputPrefix}${basename}`,
-        publish: async (message) => {
+        publish: async () => {
           // No-op: SSE removed, status tracked via DynamoDB
-          // console.debug("Template publish call (no-op):", message);
         },
       },
     };
 
-    // Assembly ID is already provided from the upload handler
     const tableName = process.env.DYNAMODB_TABLE as string;
     const nowIso = new Date().toISOString();
 
-    // Update assembly status (already created by upload handler)
     if (ddb && tableName) {
+      const ttl = computeTtl();
       await ddb.send(
         new UpdateCommand({
           TableName: tableName,
           Key: { assembly_id: assemblyId },
           UpdateExpression:
-            "SET #msg = :msg, #start = :start, #updated = :updated, #uploads = :uploads, #bytes = :bytes, #stepsTotal = :stepsTotal, #stepsCompleted = :stepsCompleted, #currentStep = :currentStep, #currentStepName = :currentStepName, #progress = :progress",
+            "SET #msg = :msg, #start = :start, #updated = :updated, #uploads = :uploads, #bytes = :bytes, #stepsTotal = :stepsTotal, #stepsCompleted = :stepsCompleted, #currentStep = :currentStep, #currentStepName = :currentStepName, #progress = :progress" +
+            (ttl !== undefined ? ", #ttl = :ttl" : ""),
           ExpressionAttributeNames: {
             "#msg": "message",
             "#start": "execution_start",
@@ -528,6 +478,7 @@ async function processJob(
             "#currentStep": "current_step",
             "#currentStepName": "current_step_name",
             "#progress": "progress_pct",
+            ...(ttl !== undefined ? { "#ttl": "ttl" } : {}),
           },
           ExpressionAttributeValues: {
             ":msg": "Processing started",
@@ -540,6 +491,7 @@ async function processJob(
             ":currentStep": 0,
             ":currentStepName": "",
             ":progress": 0,
+            ...(ttl !== undefined ? { ":ttl": ttl } : {}),
           },
         })
       );
@@ -550,7 +502,6 @@ async function processJob(
     for (const step of tpl.steps) {
       stepIndex += 1;
       ctx.currentStepName = step.name;
-      // Update progress before running the step
       if (ddb && tableName) {
         const now = new Date().toISOString();
         const progress = Math.max(
@@ -584,7 +535,6 @@ async function processJob(
         );
       }
       await step.run(ctx);
-      // Update progress after step completes
       if (ddb && tableName) {
         const now = new Date().toISOString();
         const progress = Math.max(
@@ -629,7 +579,6 @@ async function processJob(
         })
       );
     } else {
-      // Update final status in DDB and post webhook if configured
       const doneIso = new Date().toISOString();
       const executionDuration =
         (new Date(doneIso).getTime() - new Date(nowIso).getTime()) / 1000;
@@ -651,11 +600,10 @@ async function processJob(
           },
         })
       );
-      // Webhook notify with retries and optional HMAC
       try {
-        const index = loadTemplatesIndex();
-        const mod = index[templateId];
-        const tpl2: TemplateDefinition | undefined = mod?.default;
+        const idx = loadTemplatesIndex();
+        const m2 = idx[templateId];
+        const tpl2: TemplateDefinition | undefined = m2?.default;
         if (tpl2?.webhookUrl) {
           const current = await ddb.send(
             new GetCommand({
@@ -663,19 +611,17 @@ async function processJob(
               Key: { assembly_id: assemblyId },
             })
           );
-          const payload = current.Item as AssemblyStatus;
-          await sendWebhookWithRetries(
-            tpl2.webhookUrl,
-            payload,
-            tpl2.webhookSecret
-          );
+          await sendWebhookWithRetries({
+            url: tpl2.webhookUrl,
+            payload: current.Item as AssemblyStatus,
+            secret: tpl2.webhookSecret,
+          });
         }
       } catch (webhookError) {
         console.error("Failed to send webhook:", webhookError);
       }
     }
 
-    // Delete inputs from tmp bucket
     await Promise.all(
       objects
         .filter((o) => o.bucket === tmpBucket)
@@ -684,7 +630,6 @@ async function processJob(
         )
     );
   } catch (err) {
-    // On error also attempt cleanup of tmp bucket objects
     try {
       await Promise.all(
         objects
@@ -695,10 +640,8 @@ async function processJob(
       );
     } catch {}
 
-    // Update error status in DDB if available
     const tableName = process.env.DYNAMODB_TABLE as string;
     if (ddb && tableName) {
-      // Assembly ID is already provided from the upload handler
       const errorIso = new Date().toISOString();
       await ddb.send(
         new UpdateCommand({
@@ -721,11 +664,10 @@ async function processJob(
         })
       );
 
-      // Send webhook notification for errors too
       try {
-        const index = loadTemplatesIndex();
-        const mod = index[templateId];
-        const tpl2: TemplateDefinition | undefined = mod?.default;
+        const idx = loadTemplatesIndex();
+        const m2 = idx[templateId];
+        const tpl2: TemplateDefinition | undefined = m2?.default;
         if (tpl2?.webhookUrl) {
           const current = await ddb.send(
             new GetCommand({
@@ -733,12 +675,11 @@ async function processJob(
               Key: { assembly_id: assemblyId },
             })
           );
-          const payload = current.Item as AssemblyStatus;
-          await sendWebhookWithRetries(
-            tpl2.webhookUrl,
-            payload,
-            tpl2.webhookSecret
-          );
+          await sendWebhookWithRetries({
+            url: tpl2.webhookUrl,
+            payload: current.Item as AssemblyStatus,
+            secret: tpl2.webhookSecret,
+          });
         }
       } catch (webhookError) {
         console.error("Failed to send error webhook:", webhookError);
@@ -749,21 +690,17 @@ async function processJob(
 }
 
 export const handler = async (event: UnifiedEvent) => {
-  const sqs = getSQS();
-  const region =
-    process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
-  const s3 = new S3Client({ region });
+  const sqs = makeSqsClient();
+  const s3 = makeS3Client();
   const ddbEnabled = !!process.env.DYNAMODB_TABLE;
-  const ddb = ddbEnabled
-    ? DynamoDBDocumentClient.from(new DynamoDBClient({ region }))
-    : undefined;
+  const ddb = ddbEnabled ? makeDynamoDocClient() : undefined;
 
   let jobs: ProcessingJob[] = [];
 
   if (isS3Event(event)) {
-    // Convert S3 events to SQS jobs (single-Lambda bridge)
     const queueUrl = process.env.SQS_QUEUE_URL;
     if (!queueUrl) throw new Error("SQS_QUEUE_URL is required");
+    const fifo = queueUrl.endsWith(".fifo");
     const toQueue = await parseS3Jobs(event, s3);
     for (const job of toQueue) {
       try {
@@ -771,35 +708,57 @@ export const handler = async (event: UnifiedEvent) => {
           new SendMessageCommand({
             QueueUrl: queueUrl,
             MessageBody: JSON.stringify(job),
-            MessageGroupId: job.uploadId,
-            MessageDeduplicationId: `${
-              job.uploadId
-            }-${Date.now()}-${Math.random()}`,
+            ...(fifo
+              ? {
+                  MessageGroupId: job.uploadId,
+                  MessageDeduplicationId: `${job.uploadId}-${Date.now()}-${Math.random()}`,
+                }
+              : {}),
           })
         );
       } catch (e) {
         console.error("Failed to enqueue job from S3 event:", e);
       }
     }
-    // No inline processing; return after enqueue
     return;
   } else if (isSQSEvent(event)) {
-    // SQS-based processing (new concurrency-safe path)
-    jobs = await parseSQSJobs(event);
+    jobs = await parseSQSJobs(event, s3);
   } else {
     throw new Error("Unsupported event type");
   }
 
+  // Merge jobs that share an assembly_id. S3 → SQS direct integrations can
+  // deliver one event per object, which would otherwise spawn parallel
+  // processJob calls that race on the same DynamoDB record.
+  const merged = new Map<string, ProcessingJob>();
+  for (const job of jobs) {
+    const existing = merged.get(job.assemblyId);
+    if (!existing) {
+      merged.set(job.assemblyId, { ...job, objects: [...job.objects] });
+      continue;
+    }
+    const seen = new Set(existing.objects.map((o) => `${o.bucket}/${o.key}`));
+    for (const obj of job.objects) {
+      const k = `${obj.bucket}/${obj.key}`;
+      if (!seen.has(k)) {
+        existing.objects.push(obj);
+        seen.add(k);
+      }
+    }
+  }
+  jobs = Array.from(merged.values());
+
   const maxBatchSize = parseInt(process.env.MAX_BATCH_SIZE || "10");
   const jobBatches: ProcessingJob[][] = [];
 
-  // Split jobs into batches to respect memory limits
   for (let i = 0; i < jobs.length; i += maxBatchSize) {
     jobBatches.push(jobs.slice(i, i + maxBatchSize));
   }
 
-  // Process batches sequentially to avoid overwhelming resources
   for (const batch of jobBatches) {
     await Promise.all(batch.map((job) => processJob(job, s3, sqs, ddb)));
   }
 };
+
+/** Exposed for tests and the local worker. */
+export { parseSQSJobs, parseS3Jobs, processJob };

@@ -1,69 +1,76 @@
-# Transflow Example (Polling-based Status)
+# Transflow Next.js example
 
-This Next.js demo shows Transflow's secure upload flow with DynamoDB-backed status polling (no SSE).
+A minimal Next.js Pages-Router app that wires the React `<Uploader>` to your Transflow API routes. Includes shortcuts for running the entire pipeline locally against LocalStack.
 
-## Features
+## What's in here
 
-- **Polling-based Status**: Client polls a status endpoint every 2s
-- **Multi-file Upload**: Batch presigned PUTs to S3
-- **No Sessions/Auth**: Demo omits auth; assembly IDs are deterministic and unguessable
-- **Download Results**: Links to output files in S3
+- `pages/index.tsx` — the demo page with the uploader and a status table
+- `pages/api/create-upload.ts` — wraps `createUploadHandler`
+- `pages/api/status.ts` — wraps `createStatusHandler`
+- `templates/` — example templates baked into the Lambda image
+- `transflow.config.js` — single config that flips into LocalStack mode when `TRANSFLOW_AWS_ENDPOINT` is set
+- `scripts/e2e.mjs` / `scripts/e2e-suite.mjs` — integration drivers used to verify the LocalStack flow
 
-## Architecture
+## Run locally with LocalStack
 
-```
-React UI ──▶ Create Upload API ──▶ S3 (uploads/...)
-   │                                 │
-   ▼                                 ▼
-Status API ◀── DynamoDB (status) ◀── Lambda (SQS-driven)
-```
-
-## Getting Started
-
-1. Install
+You'll need Docker + Node 18+. The first time:
 
 ```bash
-cd examples/next-app
 npm install
+npm run local:up        # docker compose up LocalStack
+npm run bake            # bakes templates.index.cjs into .transflow-build/
+npm run local:start     # provisions buckets/queue/table on LocalStack
 ```
 
-2. Configure
-
-Edit `transflow.config.js` with your AWS resources. Tmp bucket is automatic; set your export buckets under `s3.exportBuckets`.
-
-3. Run
+Then in two terminals:
 
 ```bash
-npm run dev
+# terminal 1: long-lived worker (replaces the Lambda)
+npm run local:worker
+
+# terminal 2: Next.js dev server
+TRANSFLOW_AWS_ENDPOINT=http://localhost:4566 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open <http://localhost:3000>, drop an audio file, watch the status update.
 
-## Endpoints used
+To tear down:
 
-- `POST /api/create-upload` → returns presigned PUT URLs + upload info
-- `GET /api/status?assemblyId=...` → returns `AssemblyStatus` from DynamoDB
-- `POST /api/resolve-assembly` → computes `assembly_id` by streaming uploaded objects
+```bash
+npm run local:down      # docker compose down -v
+```
+
+## Deploy to AWS
+
+Drop the env var and run the regular deploy:
+
+```bash
+npm run deploy
+```
+
+This calls `transflow deploy --branch local --sha dev`. In production CI, run it with the actual branch/SHA — see the root README for the GitHub Actions setup.
+
+## Endpoints
+
+- `POST /api/create-upload` — `{ filename, contentType?, fileSize?, template, fields? }` → `{ assembly_id, upload_id, presigned_url }`. Pass `{ files: [...] }` instead for batch uploads.
+- `GET /api/status?assemblyId=…` — full `AssemblyStatus`, polled by the `<Uploader>` component every 2s until terminal.
 
 ## Client usage
 
-The page uses `@xnetcat/transflow/web`:
-
 ```tsx
-import { Uploader, TransflowProvider } from "@xnetcat/transflow/web";
+import { TransflowProvider, Uploader } from "@xnetcat/transflow/web";
 
-<TransflowProvider
-  endpoints={{
-    action: "/api/create-upload",
-    status: "/api/status",
-    resolve: "/api/resolve-assembly",
-  }}
->
-  <Uploader template="tpl_basic_audio" onUpdate={handleUpdate} multiple />
+<TransflowProvider endpoints={{ action: "/api/create-upload", status: "/api/status" }}>
+  <Uploader template="tpl_basic_audio" multiple onUpdate={(s) => console.log(s)} />
 </TransflowProvider>;
 ```
 
-## Notes
+## Run the integration suite
 
-- Status polling interval is 2s by default in the `Uploader`.
-- Example templates include `tpl_basic_audio` and `tpl_export_example`.
+```bash
+# uses your already-running LocalStack + provisioned resources
+node scripts/e2e-suite.mjs                 # full multi-scenario suite
+node scripts/e2e.mjs /tmp/test.mp3         # single-shot smoke test
+```
+
+The suite covers: lifecycle/CORS, status edge cases (404, missing param), single-file upload, batch upload (with assembly merge), failure path with tmp cleanup, webhook delivery + HMAC signature, and concurrent assemblies.

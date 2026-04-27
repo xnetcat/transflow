@@ -1,6 +1,6 @@
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import type { TransflowConfig, AssemblyStatus } from "../core/types";
+import { makeDynamoDocClient } from "../core/awsClients";
 
 export interface StatusRequest {
   query?: Record<string, string | string[]>;
@@ -14,13 +14,8 @@ export interface StatusResponse {
 }
 
 export function createStatusHandler(cfg: TransflowConfig) {
-  const region =
-    cfg.region ||
-    process.env.AWS_REGION ||
-    process.env.AWS_DEFAULT_REGION ||
-    "us-east-1";
   const tableName = cfg.dynamoDb.tableName || process.env.DYNAMODB_TABLE || "";
-  const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
+  const ddb = makeDynamoDocClient(cfg);
 
   return async function handler(req: StatusRequest, res: StatusResponse) {
     if (!tableName) {
@@ -29,8 +24,6 @@ export function createStatusHandler(cfg: TransflowConfig) {
         .json({ error: "Server not configured: DYNAMODB_TABLE missing" });
       return;
     }
-
-    // No auth/ownership checks in no-auth mode
 
     const q = req.query || {};
     const idParam = q["assemblyId"] ?? q["assembly_id"];
@@ -54,11 +47,7 @@ export function createStatusHandler(cfg: TransflowConfig) {
         return;
       }
 
-      const assembly = resp.Item as AssemblyStatus;
-
-      // No ownership enforcement
-
-      res.status(200).json(assembly);
+      res.status(200).json(resp.Item as AssemblyStatus);
     } catch (error: any) {
       res
         .status(500)

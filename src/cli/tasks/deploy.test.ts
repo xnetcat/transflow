@@ -1,11 +1,28 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@aws-sdk/client-ecr", () => ({
-  ECRClient: vi
-    .fn()
-    .mockImplementation(() => ({ send: vi.fn(async () => ({})) })),
+  ECRClient: vi.fn().mockImplementation(() => ({
+    send: vi.fn(async (command: any) => {
+      const name = command.constructor.name;
+      if (name === "GetAuthorizationTokenCommand") {
+        return {
+          authorizationData: [
+            {
+              authorizationToken: Buffer.from("AWS:dummy-password").toString(
+                "base64"
+              ),
+              proxyEndpoint: "https://123456789012.dkr.ecr.us-east-1.amazonaws.com",
+            },
+          ],
+        } as any;
+      }
+      return {} as any;
+    }),
+  })),
   CreateRepositoryCommand: class {},
   DescribeRepositoriesCommand: class {},
+  GetAuthorizationTokenCommand: class {},
+  PutLifecyclePolicyCommand: class {},
 }));
 
 vi.mock("@aws-sdk/client-lambda", () => {
@@ -22,15 +39,6 @@ vi.mock("@aws-sdk/client-lambda", () => {
         if (name === "CreateFunctionCommand") {
           const fn = command.input?.FunctionName as string | undefined;
           if (fn) created.add(fn);
-          return {} as any;
-        }
-        if (
-          name === "UpdateFunctionCodeCommand" ||
-          name === "UpdateFunctionConfigurationCommand" ||
-          name === "AddPermissionCommand" ||
-          name === "PutFunctionConcurrencyCommand" ||
-          name === "CreateEventSourceMappingCommand"
-        ) {
           return {} as any;
         }
         if (name === "ListEventSourceMappingsCommand") {
@@ -134,24 +142,23 @@ vi.mock("@aws-sdk/client-s3", () => ({
       this.input = input;
     }
   },
+  PutBucketLifecycleConfigurationCommand: class {
+    input: any;
+    constructor(input: any) {
+      this.input = input;
+    }
+  },
 }));
 
 vi.mock("@aws-sdk/client-sqs", () => ({
   SQSClient: vi.fn().mockImplementation(() => ({
     send: vi.fn(async (command: any) => {
-      // Mock different responses for different commands
       const name = command.constructor.name;
       if (name === "CreateQueueCommand") {
         return {
           QueueUrl:
             "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue.fifo",
         } as any;
-      }
-      if (name === "GetQueueAttributesCommand") {
-        return { Attributes: {} } as any;
-      }
-      if (name === "SetQueueAttributesCommand") {
-        return {} as any;
       }
       return {} as any;
     }),
@@ -176,6 +183,47 @@ vi.mock("@aws-sdk/client-sqs", () => ({
   },
 }));
 
+vi.mock("@aws-sdk/client-dynamodb", () => ({
+  DynamoDBClient: vi.fn().mockImplementation(() => ({
+    send: vi.fn(async (command: any) => {
+      const name = command.constructor.name;
+      if (name === "DescribeTableCommand") {
+        return { Table: { TableStatus: "ACTIVE" } } as any;
+      }
+      if (name === "DescribeTimeToLiveCommand") {
+        return {
+          TimeToLiveDescription: { TimeToLiveStatus: "ENABLED" },
+        } as any;
+      }
+      return {} as any;
+    }),
+  })),
+  CreateTableCommand: class {
+    input: any;
+    constructor(input: any) {
+      this.input = input;
+    }
+  },
+  DescribeTableCommand: class {
+    input: any;
+    constructor(input: any) {
+      this.input = input;
+    }
+  },
+  UpdateTimeToLiveCommand: class {
+    input: any;
+    constructor(input: any) {
+      this.input = input;
+    }
+  },
+  DescribeTimeToLiveCommand: class {
+    input: any;
+    constructor(input: any) {
+      this.input = input;
+    }
+  },
+}));
+
 vi.mock("execa", () => ({
   execa: vi.fn(async (cmd: string) => {
     if (cmd === "aws") return { stdout: "123456789012" } as any;
@@ -187,7 +235,7 @@ vi.mock("execa", () => ({
 const cfg = {
   project: "p",
   region: "us-east-1",
-  s3: { buckets: ["ub", "ob"] },
+  s3: { exportBuckets: ["ob"] },
   ecrRepo: "repo",
   lambdaPrefix: "lp-",
   templatesDir: "./t",

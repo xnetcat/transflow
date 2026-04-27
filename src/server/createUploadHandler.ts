@@ -1,10 +1,10 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import crypto from "crypto";
 import type { TransflowConfig } from "../core/types";
 import { sanitizeBranch, computeTmpBucketName } from "../core/config";
+import { makeS3Client, makeDynamoDocClient } from "../core/awsClients";
 import { validateContentType, validateFileSize } from "./auth";
 
 export interface ApiRequest {
@@ -21,10 +21,9 @@ export interface ApiResponse {
 }
 
 export function createUploadHandler(cfg: TransflowConfig) {
-  const s3 = new S3Client({ region: cfg.region });
-  const ddb = cfg.dynamoDb?.tableName
-    ? DynamoDBDocumentClient.from(new DynamoDBClient({ region: cfg.region }))
-    : null;
+  const s3 = makeS3Client(cfg);
+  const ddb = cfg.dynamoDb?.tableName ? makeDynamoDocClient(cfg) : null;
+  const ttlDays = cfg.dynamoDb?.ttlDays ?? 30;
 
   return async function handler(req: ApiRequest, res: ApiResponse) {
     if (req.method !== "POST") {
@@ -121,6 +120,10 @@ export function createUploadHandler(cfg: TransflowConfig) {
       // Create initial DynamoDB record for this assembly
       if (ddb && cfg.dynamoDb?.tableName) {
         const nowIso = new Date().toISOString();
+        const ttl =
+          ttlDays > 0
+            ? Math.floor(Date.now() / 1000) + ttlDays * 86400
+            : undefined;
 
         await ddb.send(
           new PutCommand({
@@ -146,6 +149,7 @@ export function createUploadHandler(cfg: TransflowConfig) {
               bytes_expected: fileSize || 0,
               created_at: nowIso,
               updated_at: nowIso,
+              ...(ttl !== undefined ? { ttl } : {}),
             },
           })
         );
@@ -252,6 +256,10 @@ export function createUploadHandler(cfg: TransflowConfig) {
     // Create initial DynamoDB record for batch upload
     if (ddb && cfg.dynamoDb?.tableName) {
       const nowIso = new Date().toISOString();
+      const ttl =
+        ttlDays > 0
+          ? Math.floor(Date.now() / 1000) + ttlDays * 86400
+          : undefined;
 
       await ddb.send(
         new PutCommand({
@@ -267,6 +275,7 @@ export function createUploadHandler(cfg: TransflowConfig) {
             bytes_expected: totalBytes,
             created_at: nowIso,
             updated_at: nowIso,
+            ...(ttl !== undefined ? { ttl } : {}),
           },
         })
       );

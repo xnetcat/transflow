@@ -6,8 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "bake": "transflow bake --config transflow.config.js",
-    "deploy": "transflow deploy --branch local --sha dev --config transflow.config.js --yes"
+    "bake": "transflow bake --config transflow.config.js --out .transflow-build",
+    "deploy": "transflow deploy --branch local --sha dev --config transflow.config.js --yes",
+    "local:up": "docker compose -f ../../docker-compose.localstack.yml up -d --wait",
+    "local:down": "docker compose -f ../../docker-compose.localstack.yml down -v",
+    "local:start": "TRANSFLOW_AWS_ENDPOINT=http://localhost:4566 transflow local:start --config transflow.config.js",
+    "local:worker": "TRANSFLOW_AWS_ENDPOINT=http://localhost:4566 transflow local:worker --config transflow.config.js --templates-index .transflow-build/templates.index.cjs"
   },
   "dependencies": {
     "next": "14.2.5",

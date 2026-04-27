@@ -128,6 +128,58 @@ void yargs(hideBin(process.argv))
       await checkEnv();
     }
   )
+  .command(
+    "bake",
+    "Bake templates and runtime into an output directory (templates.index.cjs)",
+    (y) =>
+      y
+        .option("config", { type: "string" })
+        .option("out", {
+          type: "string",
+          describe: "Output directory (defaults to cwd)",
+        }),
+    async (argv) => {
+      const cfg = await loadConfig(argv.config as string | undefined);
+      const { bakeTemplates } = await import("../core/bake.js");
+      const outDir = (argv.out as string | undefined) || process.cwd();
+      const templatesDir = path.resolve(process.cwd(), cfg.templatesDir);
+      const result = await bakeTemplates({ templatesDir, outDir });
+      console.log(`Baked ${result.entries.length} template(s) → ${result.indexFile}`);
+    }
+  )
+  .command(
+    "local:start",
+    "Provision Transflow resources against a LocalStack endpoint",
+    (y) => y.option("config", { type: "string" }),
+    async (argv) => {
+      const cfg = await loadConfig(argv.config as string | undefined);
+      const { localStart } = await import("./tasks/localStart.js");
+      await localStart({ cfg });
+    }
+  )
+  .command(
+    "local:worker",
+    "Run the Lambda handler in-process, polling the configured SQS queue",
+    (y) =>
+      y
+        .option("config", { type: "string" })
+        .option("templates-index", {
+          type: "string",
+          describe: "Path to a baked templates.index.cjs",
+        }),
+    async (argv) => {
+      const cfg = await loadConfig(argv.config as string | undefined);
+      const { localWorker } = await import("./tasks/localWorker.js");
+      const ac = new AbortController();
+      process.on("SIGINT", () => ac.abort());
+      process.on("SIGTERM", () => ac.abort());
+      await localWorker({
+        cfg,
+        templatesIndexPath: argv["templates-index"] as string | undefined,
+        signal: ac.signal,
+      });
+    }
+  )
   .demandCommand(1)
   .strict()
   .help().argv;

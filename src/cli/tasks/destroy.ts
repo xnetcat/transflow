@@ -1,4 +1,4 @@
-import { LambdaClient, DeleteFunctionCommand } from "@aws-sdk/client-lambda";
+import { DeleteFunctionCommand } from "@aws-sdk/client-lambda";
 import {
   S3Client,
   DeleteBucketCommand,
@@ -6,14 +6,20 @@ import {
   DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import {
-  SQSClient,
   DeleteQueueCommand,
   GetQueueUrlCommand,
 } from "@aws-sdk/client-sqs";
-import { DynamoDBClient, DeleteTableCommand } from "@aws-sdk/client-dynamodb";
-import { ECRClient, DeleteRepositoryCommand } from "@aws-sdk/client-ecr";
+import { DeleteTableCommand } from "@aws-sdk/client-dynamodb";
+import { DeleteRepositoryCommand } from "@aws-sdk/client-ecr";
 import type { TransflowConfig } from "../../core/types";
-import { computeTmpBucketName } from "../../core/config";
+import { computeTmpBucketName, resolveQueueName } from "../../core/config";
+import {
+  makeLambdaClient,
+  makeS3Client,
+  makeSqsClient,
+  makeDynamoClient,
+  makeEcrClient,
+} from "../../core/awsClients";
 
 interface DestroyArgs {
   cfg: TransflowConfig;
@@ -28,6 +34,7 @@ interface DestroyArgs {
 export async function destroy(args: DestroyArgs) {
   const { cfg, force, nonInteractive } = args;
   const region = cfg.region;
+  const queueName = resolveQueueName(cfg);
 
   if (!force && !nonInteractive) {
     console.log(
@@ -37,9 +44,7 @@ export async function destroy(args: DestroyArgs) {
     console.log(`  - Lambda: ${cfg.lambdaPrefix}${cfg.project}`);
     console.log(`  - Lambda: ${cfg.project}-status`);
     console.log(`  - DynamoDB: ${cfg.dynamoDb.tableName}`);
-    console.log(
-      `  - SQS: ${cfg.sqs.queueName || `${cfg.project}-processing.fifo`}`
-    );
+    console.log(`  - SQS: ${queueName}`);
     console.log(
       `  - S3: ${computeTmpBucketName(cfg.project, region)} (and all objects)`
     );
@@ -65,11 +70,11 @@ export async function destroy(args: DestroyArgs) {
 
   console.log("🗑️  Starting destruction of Transflow resources...");
 
-  const lambda = new LambdaClient({ region });
-  const s3 = new S3Client({ region });
-  const sqs = new SQSClient({ region });
-  const dynamodb = new DynamoDBClient({ region });
-  const ecr = new ECRClient({ region });
+  const lambda = makeLambdaClient(cfg);
+  const s3 = makeS3Client(cfg);
+  const sqs = makeSqsClient(cfg);
+  const dynamodb = makeDynamoClient(cfg);
+  const ecr = makeEcrClient(cfg);
 
   // Delete Lambda functions
   const functionName = `${cfg.lambdaPrefix}${cfg.project}`;
@@ -87,7 +92,6 @@ export async function destroy(args: DestroyArgs) {
   }
 
   // Delete SQS queue
-  const queueName = cfg.sqs.queueName || `${cfg.project}-processing.fifo`;
   try {
     const { QueueUrl } = await sqs.send(
       new GetQueueUrlCommand({ QueueName: queueName })

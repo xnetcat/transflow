@@ -23,5 +23,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: transflow-cleanup
           aws-region: ${{ secrets.AWS_REGION }}
-      - name: Cleanup
-        run: npx transflow cleanup --branch "${{ github.event.ref }}" --config transflow.config.js --yes
+      - name: Cleanup branch resources
+        run: >
+          npx transflow cleanup
+          --branch "${{ github.event.ref }}"
+          --config transflow.config.js
+          --delete-storage
+          --delete-ecr-images
+          --yes

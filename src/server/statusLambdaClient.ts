@@ -1,14 +1,17 @@
-import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
+import { InvokeCommand } from "@aws-sdk/client-lambda";
 import type {
   StatusLambdaEvent,
   StatusLambdaResponse,
 } from "../lambda/statusHandler";
-import type { AssemblyStatus } from "../core/types";
+import type { AssemblyStatus, TransflowConfig } from "../core/types";
+import { makeLambdaClient } from "../core/awsClients";
 
 export interface StatusClientConfig {
   region: string;
   functionName: string;
   awsProfile?: string;
+  endpoint?: string;
+  credentials?: TransflowConfig["credentials"];
 }
 
 export interface StatusCheckOptions {
@@ -24,14 +27,13 @@ export interface StatusCheckResult {
 }
 
 export class StatusLambdaClient {
-  private lambda: LambdaClient;
+  private lambda;
   private functionName: string;
 
   constructor(config: StatusClientConfig) {
-    this.lambda = new LambdaClient({
-      region: config.region,
-      ...(config.awsProfile && { profile: config.awsProfile }),
-    });
+    this.lambda = makeLambdaClient(
+      { region: config.region, endpoint: config.endpoint, credentials: config.credentials } as Partial<TransflowConfig>
+    );
     this.functionName = config.functionName;
   }
 
@@ -51,68 +53,58 @@ export class StatusLambdaClient {
       );
 
       if (!response.Payload) {
-        return {
-          success: false,
-          error: "No response payload from Lambda",
-        };
+        return { success: false, error: "No response payload from Lambda" };
       }
 
       const payloadString = Buffer.from(response.Payload).toString();
       const lambdaResponse: StatusLambdaResponse = JSON.parse(payloadString);
 
       if (lambdaResponse.statusCode === 200) {
-        const status: AssemblyStatus = JSON.parse(lambdaResponse.body);
         return {
           success: true,
-          status,
-          statusCode: lambdaResponse.statusCode,
-        };
-      } else {
-        const errorBody = JSON.parse(lambdaResponse.body);
-        return {
-          success: false,
-          error: errorBody.error || "Unknown error",
+          status: JSON.parse(lambdaResponse.body) as AssemblyStatus,
           statusCode: lambdaResponse.statusCode,
         };
       }
+      const errorBody = JSON.parse(lambdaResponse.body);
+      return {
+        success: false,
+        error: errorBody.error || "Unknown error",
+        statusCode: lambdaResponse.statusCode,
+      };
     } catch (error) {
       return {
         success: false,
-        error:
-          error instanceof Error ? error.message : "Unknown error occurred",
+        error: error instanceof Error ? error.message : "Unknown error occurred",
       };
     }
   }
 
-  /**
-   * Convenience method to just get the status without webhook trigger
-   */
   async getStatus(assemblyId: string): Promise<StatusCheckResult> {
     return this.checkStatus({ assemblyId, triggerWebhook: false });
   }
 
-  /**
-   * Convenience method to get status and trigger webhook
-   */
   async getStatusWithWebhook(assemblyId: string): Promise<StatusCheckResult> {
     return this.checkStatus({ assemblyId, triggerWebhook: true });
   }
 }
 
 /**
- * Factory function to create a status client from Transflow config
- * Status Lambda is always deployed with predictable name: {project}-status
+ * Build a status client from a TransflowConfig.
+ * Status Lambda is always deployed with predictable name: {project}-status.
  */
 export function createStatusClient(config: {
   region: string;
   project: string;
   awsProfile?: string;
+  endpoint?: string;
+  credentials?: TransflowConfig["credentials"];
 }): StatusLambdaClient {
-  const functionName = `${config.project}-status`;
-
   return new StatusLambdaClient({
     region: config.region,
-    functionName,
+    functionName: `${config.project}-status`,
     awsProfile: config.awsProfile,
+    endpoint: config.endpoint,
+    credentials: config.credentials,
   });
 }

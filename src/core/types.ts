@@ -1,40 +1,65 @@
+export interface TransflowAwsCredentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+}
+
 export interface TransflowConfig {
   project: string;
   region: string;
   awsProfile?: string;
+  /**
+   * Optional custom endpoint (e.g. http://localhost:4566 for LocalStack).
+   * When set, every AWS client routes through this URL and S3 forces path-style.
+   * Can also be supplied via TRANSFLOW_AWS_ENDPOINT.
+   */
+  endpoint?: string;
+  /**
+   * Static credentials override. Useful for LocalStack ("test"/"test") or CI.
+   * Can also be supplied via TRANSFLOW_AWS_ACCESS_KEY_ID / SECRET_ACCESS_KEY.
+   */
+  credentials?: TransflowAwsCredentials;
   s3: {
-    // Optional explicit list of export buckets (never deleted)
     exportBuckets?: string[];
-    userIsolation?: boolean; // Enable user-based path isolation
-    maxFileSize?: number; // Max file size in bytes
-    allowedContentTypes?: string[]; // Restrict file types
+    maxFileSize?: number;
+    allowedContentTypes?: string[];
+    /** Force path-style addressing (auto-enabled when endpoint is set). */
+    forcePathStyle?: boolean;
+    /** CORS AllowedOrigins for the tmp bucket. Defaults to ["*"]. */
+    corsAllowedOrigins?: string[];
+    /** Days after which uploads/ objects in the tmp bucket expire. Defaults to 7. */
+    tmpRetentionDays?: number;
   };
   ecrRepo: string;
-  // When using shared resources, this is the single function name to deploy
+  /** Optional ECR config. */
+  ecr?: {
+    /** Keep only the last N images in the repo. Defaults to 10. */
+    retainImages?: number;
+  };
   lambdaPrefix: string;
   templatesDir: string;
-  // Removed; build context derived from project root
   dynamoDb: {
-    tableName: string; // REQUIRED: single table for job/status storage
+    tableName: string;
+    /** TTL in days for assembly records. 0 disables TTL. Defaults to 30. */
+    ttlDays?: number;
   };
   lambda: {
     memoryMb: number;
     timeoutSec: number;
     architecture?: "x86_64" | "arm64";
     roleArn?: string;
-    reservedConcurrency?: number; // Limit concurrent executions
-    maxBatchSize?: number; // Max files to process per invocation
+    /** Cap on concurrent Lambda executions. Defaults to 10. */
+    reservedConcurrency?: number;
+    maxBatchSize?: number;
   };
-  // Optional dedicated status Lambda for user-facing status checks
-  // Status Lambda is automatically deployed with name: {project}-status
   sqs: {
-    // Shared processing queue across all branches
     queueName?: string;
     visibilityTimeoutSec?: number;
-    maxReceiveCount?: number; // For DLQ
-    batchSize?: number; // SQS batch size (1-10)
+    maxReceiveCount?: number;
+    batchSize?: number;
+    /** FIFO queue with content-based dedupe. Defaults to true. */
+    fifo?: boolean;
   };
-  // auth removed
 }
 
 export interface StepContextUtils {
@@ -93,10 +118,7 @@ export interface StepContext {
   awsRegion: string;
   utils: StepContextUtils;
   tmpDir: string;
-  // Arbitrary, small metadata provided by the client at upload time
-  // (e.g., slug, timestamp, previewStartTime, previewEndTime)
   fields?: Record<string, string>;
-  // User context for secure processing
   user?: UserContext;
 }
 
@@ -108,34 +130,30 @@ export interface TemplateStep {
 export interface TemplateDefinition {
   id: string;
   outputPrefix?: string;
-  // Optional override for where results should be stored.
-  // If not provided, the handler will use OUTPUT_BUCKET env or fallback to the input bucket.
   outputBucket?: string;
-  // Optional: webhook URL to notify on completion/error with assembly payload
   webhookUrl?: string;
-  // Optional: secret for HMAC signing of webhook payload (X-Transflow-Signature header)
   webhookSecret?: string;
   steps: TemplateStep[];
 }
 
 export interface BakedTemplateIndexEntry {
   id: string;
-  path: string; // relative path inside the image, e.g. templates/tpl_basic_audio.js
+  path: string;
 }
 
 export interface BakeResult {
   outDir: string;
   entries: BakedTemplateIndexEntry[];
-  indexFile: string; // templates.index.cjs path
+  indexFile: string;
 }
 
 export interface DeployOptions {
   branch: string;
   sha: string;
-  tag?: string; // optional override tag
-  yes?: boolean; // non-interactive
+  tag?: string;
+  yes?: boolean;
   configPath?: string;
-  forceRebuild?: boolean; // force docker image rebuild
+  forceRebuild?: boolean;
 }
 
 export interface CleanupOptions {
@@ -152,7 +170,6 @@ export interface CheckResult {
   nodeVersion: string;
 }
 
-// Final job/assembly record shape (simplified Transloadit-like)
 export interface AssemblyStatus {
   assembly_id: string;
   ok?: "ASSEMBLY_COMPLETED";
@@ -169,14 +186,12 @@ export interface AssemblyStatus {
   execution_start?: string;
   jobs_queue_duration?: number;
   last_job_completed?: string;
-  // Progress tracking
-  progress_pct?: number; // 0-100
+  progress_pct?: number;
   steps_total?: number;
   steps_completed?: number;
-  current_step?: number; // 1-based index of current step
+  current_step?: number;
   current_step_name?: string;
-  // Client-side upload progress (ephemeral, not guaranteed to persist server-side)
-  upload_progress_pct?: number; // 0-100
+  upload_progress_pct?: number;
   merged_params?: Record<string, unknown>;
   uploads?: Array<{
     id: string;
@@ -211,4 +226,6 @@ export interface AssemblyStatus {
   user?: { userId: string };
   updated_at?: string;
   created_at?: string;
+  /** Epoch seconds when DynamoDB will expire this record. */
+  ttl?: number;
 }

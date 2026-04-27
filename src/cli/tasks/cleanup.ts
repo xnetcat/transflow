@@ -1,9 +1,4 @@
-import { LambdaClient, DeleteFunctionCommand } from "@aws-sdk/client-lambda";
-import {
-  ECRClient,
-  DescribeImagesCommand,
-  BatchDeleteImageCommand,
-} from "@aws-sdk/client-ecr";
+import { DescribeImagesCommand, BatchDeleteImageCommand } from "@aws-sdk/client-ecr";
 import {
   S3Client,
   ListObjectsV2Command,
@@ -11,6 +6,7 @@ import {
 } from "@aws-sdk/client-s3";
 import type { TransflowConfig } from "../../core/types";
 import { computeTmpBucketName } from "../../core/config";
+import { makeS3Client, makeEcrClient } from "../../core/awsClients";
 
 interface CleanupArgs {
   cfg: TransflowConfig;
@@ -22,10 +18,8 @@ interface CleanupArgs {
 
 export async function cleanup(args: CleanupArgs) {
   const { cfg, branch, deleteStorage, deleteEcrImages } = args;
-  const region = cfg.region;
-  const lambda = new LambdaClient({ region });
-  const ecr = new ECRClient({ region });
-  const s3 = new S3Client({ region });
+  const ecr = makeEcrClient(cfg);
+  const s3 = makeS3Client(cfg);
 
   // Note: We're using shared Lambda functions now, so we don't delete per-branch Lambda functions
   // The main Lambda function is shared across all branches and should not be deleted during branch cleanup
