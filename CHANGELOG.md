@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/xnetcat/transflow/compare/v1.1.0...v1.2.0) (2026-04-27)
+
+
+### Features
+
+* **uploader:** drag-and-drop, a11y, accept/maxFileSize props, polished demo ([9af7027](https://github.com/xnetcat/transflow/commit/9af7027fdbfb4e718ed5d1fe09c721a5d48be63c))
+
+
+### Bug Fixes
+
+* , feat!: prefixes will drive subsequent releases automatically. ([36f7f3e](https://github.com/xnetcat/transflow/commit/36f7f3e9d61309113d5d0c32a9fea973adac206e))
+
 ## 1.1.0 — 2026-04-27
 
 ### Added
