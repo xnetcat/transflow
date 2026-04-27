@@ -11,18 +11,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Required for npm Trusted Publishing (OIDC). The npm CLI exchanges
+      # this short-lived GitHub OIDC token for a one-shot publish credential
+      # — no NPM_TOKEN needed.
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          # Node 24 ships npm 11+, which supports Trusted Publishing.
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run build
-      - name: Publish
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish (with provenance via Trusted Publishing)
+        run: npm publish --provenance --access public
