@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/xnetcat/transflow/compare/v1.1.0...v1.1.1) (2026-04-27)
+
+
+### Bug Fixes
+
+* , feat!: prefixes will drive subsequent releases automatically. ([36f7f3e](https://github.com/xnetcat/transflow/commit/36f7f3e9d61309113d5d0c32a9fea973adac206e))
+
 ## 1.1.0 — 2026-04-27
 
 ### Added
