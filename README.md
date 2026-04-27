@@ -277,6 +277,17 @@ For ffmpeg specifically, **bumping `lambda.memoryMb` to 1769** allocates a full 
 - DynamoDB is the source of truth for status. Webhooks are HMAC-signed (`X-Transflow-Signature: sha256=…`) when `webhookSecret` is set.
 - `assembly_id` is 32 random bytes — unguessable.
 
+## Releasing
+
+Versioning is automated via [release-please](https://github.com/googleapis/release-please). Land commits on `main` using [Conventional Commits](https://www.conventionalcommits.org/):
+
+- `feat: ...` → minor bump
+- `fix: ...` → patch bump
+- `feat!: ...` or a `BREAKING CHANGE:` footer → major bump
+- `chore: …`, `docs: …`, `refactor: …`, `test: …`, `ci: …` → no bump (CHANGELOG only when not hidden)
+
+Release-please watches `main` and opens a "release PR" with the version bump, generated CHANGELOG entries, and updated manifest. Merging that PR creates a `vX.Y.Z` tag, and the existing `publish.yml` workflow ships it to npm via Trusted Publishing (with provenance attestations) — no token required.
+
 ## Internals
 
 - AWS SDK v3 throughout (no `aws-lambda` package).
