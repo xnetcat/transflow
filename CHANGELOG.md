@@ -5,12 +5,14 @@
 
 ### Features
 
-* **uploader:** drag-and-drop, a11y, accept/maxFileSize props, polished demo ([9af7027](https://github.com/xnetcat/transflow/commit/9af7027fdbfb4e718ed5d1fe09c721a5d48be63c))
-
-
-### Bug Fixes
-
-* , feat!: prefixes will drive subsequent releases automatically. ([36f7f3e](https://github.com/xnetcat/transflow/commit/36f7f3e9d61309113d5d0c32a9fea973adac206e))
+* **uploader:** drag-and-drop, a11y, accept/maxFileSize props ([9af7027](https://github.com/xnetcat/transflow/commit/9af7027fdbfb4e718ed5d1fe09c721a5d48be63c))
+  * real drag-and-drop with hover/drop visual states
+  * keyboard activation (Tab + Enter/Space) with `role="button"`, `aria-busy`, `aria-disabled`
+  * animated spinner while busy
+  * new optional props: `accept`, `disabled`, `maxFileSize`, `label`, `hint`, `className`
+  * multiple dismissable errors instead of a single rolling string
+  * input value reset after upload so picking the same file twice still triggers a change
+* polished `examples/next-app` demo: status pills with pulsing indicators, copy-to-clipboard for `assembly_id`, "Clear list" button, friendlier empty state, mobile-friendly stat row, footer showing the active endpoint, tone-aware progress bars
 
 ## 1.1.0 — 2026-04-27
 
