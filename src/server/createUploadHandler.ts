@@ -98,7 +98,11 @@ export function createUploadHandler(cfg: TransflowConfig) {
     const bucket = computeTmpBucketName(cfg.project, cfg.region);
 
     if (!isBatch) {
-      const key = `${baseKey}/${filename}`;
+      // The earlier guard returned a 400 if filename was missing in single-file
+      // mode. TS doesn't carry the narrowing across the conditional branches,
+      // so assert non-undefined here.
+      const fname = filename as string;
+      const key = `${baseKey}/${fname}`;
 
       const put = new PutObjectCommand({
         Bucket: bucket,
@@ -109,7 +113,7 @@ export function createUploadHandler(cfg: TransflowConfig) {
           "upload-id": uploadId,
           "template-id": templateId,
           branch: branch,
-          filename: filename,
+          filename: fname,
         },
       });
 
@@ -137,9 +141,9 @@ export function createUploadHandler(cfg: TransflowConfig) {
               uploads: [
                 {
                   id: uploadId,
-                  name: filename,
-                  basename: filename.replace(/\.[^.]+$/, ""),
-                  ext: filename.split(".").pop() || "",
+                  name: fname,
+                  basename: fname.replace(/\.[^.]+$/, ""),
+                  ext: fname.split(".").pop() || "",
                   size: fileSize || 0,
                   mime: contentType,
                   field: "file",

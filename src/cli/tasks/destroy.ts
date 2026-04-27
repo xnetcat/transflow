@@ -161,7 +161,10 @@ export async function destroy(args: DestroyArgs) {
 async function emptyBucket(s3: S3Client, bucket: string) {
   let token: string | undefined = undefined;
   do {
-    const listed = await s3.send(
+    const listed: {
+      Contents?: { Key?: string }[];
+      NextContinuationToken?: string;
+    } = await s3.send(
       new ListObjectsV2Command({
         Bucket: bucket,
         ContinuationToken: token,
@@ -173,7 +176,9 @@ async function emptyBucket(s3: S3Client, bucket: string) {
         new DeleteObjectsCommand({
           Bucket: bucket,
           Delete: {
-            Objects: listed.Contents.map((o) => ({ Key: o.Key! })),
+            Objects: listed.Contents.map((o: { Key?: string }) => ({
+              Key: o.Key!,
+            })),
           },
         })
       );
